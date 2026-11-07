@@ -1,5 +1,5 @@
 diff --git a/apps/web/tests/rich-text-quotes.e2e.ts b/apps/web/tests/rich-text-quotes.e2e.ts
-index 91dc437..2f5ae93 100644
+index 91dc4371..2f5ae934 100644
 --- a/apps/web/tests/rich-text-quotes.e2e.ts
 +++ b/apps/web/tests/rich-text-quotes.e2e.ts
 @@ -22,6 +22,7 @@ const BORROWED = fileURLToPath(new URL('../../../snapshots/web/seeded-history/se
@@ -188,7 +188,7 @@ index 91dc437..2f5ae93 100644
 +
 +})
 diff --git a/packages/client/ui-chat/src/client/chat/ReasoningRow.tsx b/packages/client/ui-chat/src/client/chat/ReasoningRow.tsx
-index a91ef3a..6bb3d79 100644
+index a91ef3a1..6bb3d79e 100644
 --- a/packages/client/ui-chat/src/client/chat/ReasoningRow.tsx
 +++ b/packages/client/ui-chat/src/client/chat/ReasoningRow.tsx
 @@ -1,6 +1,6 @@
@@ -239,7 +239,7 @@ index a91ef3a..6bb3d79 100644
      && (running || policy.settledReasoningPreview))
    const collapsedContent = useMemo(() => (
 diff --git a/packages/client/ui-chat/src/client/reasoning-text.ts b/packages/client/ui-chat/src/client/reasoning-text.ts
-index c690e87..22d6116 100644
+index c690e879..22d6116a 100644
 --- a/packages/client/ui-chat/src/client/reasoning-text.ts
 +++ b/packages/client/ui-chat/src/client/reasoning-text.ts
 @@ -1,25 +1,2 @@
@@ -271,7 +271,7 @@ index c690e87..22d6116 100644
 +/** Backward-compatible main-chat import for shared reasoning display preparation. */
 +export { reasoningText } from '@deepseek-ai/dsh-client-ui-primitives'
 diff --git a/packages/client/ui-layout/src/client/index.ts b/packages/client/ui-layout/src/client/index.ts
-index aec2430..3fa80c0 100644
+index aec24303..3fa80c02 100644
 --- a/packages/client/ui-layout/src/client/index.ts
 +++ b/packages/client/ui-layout/src/client/index.ts
 @@ -52,6 +52,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -284,7 +284,7 @@ index aec2430..3fa80c0 100644
      // there); these are the frame's children, declared by the same
      // register() call that contributes AppFrame. Session owners never pass
 diff --git a/packages/client/ui-model-selection/package.json b/packages/client/ui-model-selection/package.json
-index 24a4e1f..c523bdc 100644
+index 24a4e1f8..c523bdc7 100644
 --- a/packages/client/ui-model-selection/package.json
 +++ b/packages/client/ui-model-selection/package.json
 @@ -53,6 +53,7 @@
@@ -296,7 +296,7 @@ index 24a4e1f..c523bdc 100644
      "@deepseek-ai/dsh-client-ui-primitives": "workspace:*",
      "@deepseek-ai/dsh-client-ui-slots": "workspace:*",
 diff --git a/packages/client/ui-model-selection/src/client/index.ts b/packages/client/ui-model-selection/src/client/index.ts
-index b91ee20..655f6a5 100644
+index b91ee20b..655f6a59 100644
 --- a/packages/client/ui-model-selection/src/client/index.ts
 +++ b/packages/client/ui-model-selection/src/client/index.ts
 @@ -12,16 +12,20 @@
@@ -382,7 +382,7 @@ index b91ee20..655f6a5 100644
    })
  }
 diff --git a/packages/client/ui-model-selection/tsconfig.json b/packages/client/ui-model-selection/tsconfig.json
-index 862648d..60e02ad 100644
+index 862648d6..60e02ad5 100644
 --- a/packages/client/ui-model-selection/tsconfig.json
 +++ b/packages/client/ui-model-selection/tsconfig.json
 @@ -32,6 +32,9 @@
@@ -396,10 +396,10 @@ index 862648d..60e02ad 100644
        "path": "../ui-primitives"
      },
 diff --git a/packages/client/ui-primitives/src/index.ts b/packages/client/ui-primitives/src/index.ts
-index 13f9986..be53d73 100644
+index 13f99869..6d26d8f7 100644
 --- a/packages/client/ui-primitives/src/index.ts
 +++ b/packages/client/ui-primitives/src/index.ts
-@@ -38,11 +38,10 @@ export type { MenuSurfaceProps } from './MenuSurface.tsx'
+@@ -38,11 +38,12 @@ export type { MenuSurfaceProps } from './MenuSurface.tsx'
  export { MenuGroup, observeStickyMenuGroups } from './MenuGroup.tsx'
  export type { MenuItemButtonProps, MenuEntry, MenuItem, MenuSeparator, MenuLabel } from './Menu.tsx'
  export { useAnchoredMaxHeight } from './useAnchoredMaxHeight.ts'
@@ -409,10 +409,12 @@ index 13f9986..be53d73 100644
  export { HoverCard } from './HoverCard.tsx'
  export { HoverCardGroup } from './HoverCardGroup.tsx'
 +export { usePointerGrace } from './pointer-grace.ts'
++export { useAnchoredPosition } from './useAnchoredPosition.ts'
++export type { AnchoredPositionOptions } from './useAnchoredPosition.ts'
  export { ShortcutKeys } from './ShortcutKeys.tsx'
  export { observeComposition } from './keyboard-composition.ts'
  export { focusWithoutRing, isMobileDevice } from './focus.ts'
-@@ -123,6 +122,7 @@ export type { MarkdownDelegate, MarkdownDelegateProviderProps, MarkdownExternalL
+@@ -123,6 +124,7 @@ export type { MarkdownDelegate, MarkdownDelegateProviderProps, MarkdownExternalL
  export { DetailDocument, detailDocumentState, useDetailDocumentLabels } from './DetailDocument.tsx'
  export type { DetailDocumentCopy, DetailDocumentLabels, DetailDocumentRead, DetailDocumentState } from './DetailDocument.tsx'
  export { MarkdownText } from './markdown/MarkdownText.tsx'
@@ -422,7 +424,7 @@ index 13f9986..be53d73 100644
  export type { MarkdownPlainTextMode, MarkdownPlainTextOptions } from './markdown/plain-text.ts'
 diff --git a/packages/client/ui-primitives/src/reasoning-preview.ts b/packages/client/ui-primitives/src/reasoning-preview.ts
 new file mode 100644
-index 0000000..3423911
+index 00000000..34239113
 --- /dev/null
 +++ b/packages/client/ui-primitives/src/reasoning-preview.ts
 @@ -0,0 +1,48 @@
@@ -476,7 +478,7 @@ index 0000000..3423911
 +}
 diff --git a/packages/client/ui-primitives/tests/reasoning-preview.client.spec.ts b/packages/client/ui-primitives/tests/reasoning-preview.client.spec.ts
 new file mode 100644
-index 0000000..7a1a328
+index 00000000..7a1a3285
 --- /dev/null
 +++ b/packages/client/ui-primitives/tests/reasoning-preview.client.spec.ts
 @@ -0,0 +1,16 @@
@@ -497,7 +499,7 @@ index 0000000..7a1a328
 +  })
 +})
 diff --git a/packages/client/ui-workspace/src/client/tree.ts b/packages/client/ui-workspace/src/client/tree.ts
-index 054c584..e5a1984 100644
+index 054c584d..e5a1984b 100644
 --- a/packages/client/ui-workspace/src/client/tree.ts
 +++ b/packages/client/ui-workspace/src/client/tree.ts
 @@ -233,6 +233,14 @@ function sessionVisible(
@@ -516,7 +518,7 @@ index 054c584..e5a1984 100644
    switch (archivedFilter) {
      case 'default':
 diff --git a/packages/client/ui-workspace/tests/tree.client.spec.ts b/packages/client/ui-workspace/tests/tree.client.spec.ts
-index b754980..7954185 100644
+index b754980c..79541859 100644
 --- a/packages/client/ui-workspace/tests/tree.client.spec.ts
 +++ b/packages/client/ui-workspace/tests/tree.client.spec.ts
 @@ -1,4 +1,4 @@
@@ -544,7 +546,7 @@ index b754980..7954185 100644
  const summary = (id: string, updatedAt: number, cwd?: string): SessionSummary => ({
    id: sid(id), title: id, displayTitle: id, running: false, blank: false,
 diff --git a/packages/session/message-quotes/README.md b/packages/session/message-quotes/README.md
-index 60ecd38..300469a 100644
+index 60ecd388..300469ac 100644
 --- a/packages/session/message-quotes/README.md
 +++ b/packages/session/message-quotes/README.md
 @@ -9,7 +9,7 @@ English | [中文](README.zh.md)
@@ -575,7 +577,7 @@ index 60ecd38..300469a 100644
  
  <a id="known-limitations-and-deferred-work"></a>
 diff --git a/packages/session/message-quotes/README.zh.md b/packages/session/message-quotes/README.zh.md
-index 91d95c4..4e1fea9 100644
+index 91d95c41..4e1fea99 100644
 --- a/packages/session/message-quotes/README.zh.md
 +++ b/packages/session/message-quotes/README.zh.md
 @@ -9,7 +9,7 @@ kind: "package-reference"
@@ -606,7 +608,7 @@ index 91d95c4..4e1fea9 100644
  
  <a id="known-limitations-and-deferred-work"></a>
 diff --git a/packages/session/message-quotes/package.json b/packages/session/message-quotes/package.json
-index 9e0b168..833a172 100644
+index 9e0b168b..833a172a 100644
 --- a/packages/session/message-quotes/package.json
 +++ b/packages/session/message-quotes/package.json
 @@ -40,8 +40,10 @@
@@ -633,7 +635,7 @@ index 9e0b168..833a172 100644
        "platform": "web"
 diff --git a/packages/session/message-quotes/src/client/BranchChatOverlay.module.css b/packages/session/message-quotes/src/client/BranchChatOverlay.module.css
 new file mode 100644
-index 0000000..ff2647b
+index 00000000..ff2647bf
 --- /dev/null
 +++ b/packages/session/message-quotes/src/client/BranchChatOverlay.module.css
 @@ -0,0 +1,159 @@
@@ -798,7 +800,7 @@ index 0000000..ff2647b
 +@media (max-width: 600px) { .card { border-radius: 18px; } .header { padding-left: 16px; } }
 diff --git a/packages/session/message-quotes/src/client/BranchChatOverlay.tsx b/packages/session/message-quotes/src/client/BranchChatOverlay.tsx
 new file mode 100644
-index 0000000..e83797b
+index 00000000..e83797b1
 --- /dev/null
 +++ b/packages/session/message-quotes/src/client/BranchChatOverlay.tsx
 @@ -0,0 +1,154 @@
@@ -957,7 +959,7 @@ index 0000000..e83797b
 +  </div>
 +}
 diff --git a/packages/session/message-quotes/src/client/QuoteSelection.module.css b/packages/session/message-quotes/src/client/QuoteSelection.module.css
-index 66eda4c..b8f1a4d 100644
+index 66eda4cf..b8f1a4de 100644
 --- a/packages/session/message-quotes/src/client/QuoteSelection.module.css
 +++ b/packages/session/message-quotes/src/client/QuoteSelection.module.css
 @@ -1,3 +1,13 @@
@@ -984,7 +986,7 @@ index 66eda4c..b8f1a4d 100644
    font: var(--dsw-font-xs-13);
    cursor: pointer;
 diff --git a/packages/session/message-quotes/src/client/QuoteSelection.tsx b/packages/session/message-quotes/src/client/QuoteSelection.tsx
-index 431628a..e31c9c4 100644
+index 431628ac..e31c9c4b 100644
 --- a/packages/session/message-quotes/src/client/QuoteSelection.tsx
 +++ b/packages/session/message-quotes/src/client/QuoteSelection.tsx
 @@ -1,6 +1,8 @@
@@ -1041,7 +1043,7 @@ index 431628a..e31c9c4 100644
  }
 diff --git a/packages/session/message-quotes/src/client/branch-chat.ts b/packages/session/message-quotes/src/client/branch-chat.ts
 new file mode 100644
-index 0000000..b0caac4
+index 00000000..b0caac46
 --- /dev/null
 +++ b/packages/session/message-quotes/src/client/branch-chat.ts
 @@ -0,0 +1,279 @@
@@ -1326,7 +1328,7 @@ index 0000000..b0caac4
 +}
 diff --git a/packages/session/message-quotes/src/client/branch-math.ts b/packages/session/message-quotes/src/client/branch-math.ts
 new file mode 100644
-index 0000000..bc2fc7f
+index 00000000..bc2fc7f9
 --- /dev/null
 +++ b/packages/session/message-quotes/src/client/branch-math.ts
 @@ -0,0 +1,32 @@
@@ -1363,7 +1365,7 @@ index 0000000..bc2fc7f
 +  return output.join('\n')
 +}
 diff --git a/packages/session/message-quotes/src/client/index.ts b/packages/session/message-quotes/src/client/index.ts
-index e7a9348..5e28bba 100644
+index e7a93480..5e28bbaa 100644
 --- a/packages/session/message-quotes/src/client/index.ts
 +++ b/packages/session/message-quotes/src/client/index.ts
 @@ -5,7 +5,10 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
@@ -1415,7 +1417,7 @@ index e7a9348..5e28bba 100644
      name: 'conversation.user.text.node', key: 'quote', priority: 100,
    }, QuotedUserText))
 diff --git a/packages/session/message-quotes/src/client/locales.ts b/packages/session/message-quotes/src/client/locales.ts
-index 4d704e8..f738b5d 100644
+index 4d704e80..f738b5d7 100644
 --- a/packages/session/message-quotes/src/client/locales.ts
 +++ b/packages/session/message-quotes/src/client/locales.ts
 @@ -6,6 +6,18 @@ export const NS = 'messageQuotes'
@@ -1509,7 +1511,7 @@ index 4d704e8..f738b5d 100644
  } satisfies Record<keyof typeof en, string>
 diff --git a/packages/session/message-quotes/tests/branch-math.client.spec.ts b/packages/session/message-quotes/tests/branch-math.client.spec.ts
 new file mode 100644
-index 0000000..a0a412a
+index 00000000..a0a412ac
 --- /dev/null
 +++ b/packages/session/message-quotes/tests/branch-math.client.spec.ts
 @@ -0,0 +1,14 @@
@@ -1528,7 +1530,7 @@ index 0000000..a0a412a
 +  })
 +})
 diff --git a/packages/session/message-quotes/tests/quote-selection.client.spec.tsx b/packages/session/message-quotes/tests/quote-selection.client.spec.tsx
-index 1f773bf..a9edd0f 100644
+index 1f773bfa..a9edd0f4 100644
 --- a/packages/session/message-quotes/tests/quote-selection.client.spec.tsx
 +++ b/packages/session/message-quotes/tests/quote-selection.client.spec.tsx
 @@ -13,9 +13,11 @@ function props(enabled = true, subagent: SessionSnapshot['subagent'] = null) {
@@ -1597,7 +1599,7 @@ index 1f773bf..a9edd0f 100644
      expect(view.queryByRole('button')).toBeNull()
      view.rerender(<Surface value={fixture.value} />)
 diff --git a/packages/session/message-quotes/tsconfig.json b/packages/session/message-quotes/tsconfig.json
-index 51efa33..33ce824 100644
+index 51efa335..33ce824d 100644
 --- a/packages/session/message-quotes/tsconfig.json
 +++ b/packages/session/message-quotes/tsconfig.json
 @@ -17,12 +17,18 @@
