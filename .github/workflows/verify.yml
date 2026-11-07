@@ -1,0 +1,41 @@
+name: Verify source patch
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out this release
+        uses: actions/checkout@v4
+        with:
+          path: extension
+      - name: Check out pinned DeepSeek Harness source
+        uses: actions/checkout@v4
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: dsh-v0.2.2-rc.1
+          path: harness
+      - name: Apply and inspect patch
+        working-directory: harness
+        run: |
+          git apply --check ../extension/patches/dsh-v0.2.2-rc.1-branch-chat.patch
+          git apply ../extension/patches/dsh-v0.2.2-rc.1-branch-chat.patch
+          git diff --check
+      - name: Use Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install dependencies
+        working-directory: harness
+        run: |
+          corepack enable
+          pnpm install --no-frozen-lockfile
+      - name: Build and test relevant code
+        working-directory: harness
+        run: |
+          pnpm run build
+          pnpm exec vitest run packages/session/message-quotes/tests/branch-math.client.spec.ts packages/session/message-quotes/tests/quote-selection.client.spec.tsx

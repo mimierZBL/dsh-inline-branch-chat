@@ -1,0 +1,2 @@
+# Diff files contain literal added lines; their whitespace is checked when applied.
+patches/*.patch -whitespace

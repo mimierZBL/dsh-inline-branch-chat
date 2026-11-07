@@ -1,0 +1,1621 @@
+diff --git a/apps/web/tests/rich-text-quotes.e2e.ts b/apps/web/tests/rich-text-quotes.e2e.ts
+index 91dc437..2f5ae93 100644
+--- a/apps/web/tests/rich-text-quotes.e2e.ts
++++ b/apps/web/tests/rich-text-quotes.e2e.ts
+@@ -22,6 +22,7 @@ const BORROWED = fileURLToPath(new URL('../../../snapshots/web/seeded-history/se
+ const UI_EXPECTED = fileURLToPath(new URL('../../../snapshots/web/rich-text-quotes/ui.expected.md', import.meta.url))
+ const MODE = webSnapshotMode()
+ const SESSION_ID = 'rich-text-quotes-web-e2e'
++const BRANCH_ID = 'rich-text-branch-web-e2e'
+ const OTHER_ID = 'rich-text-quotes-other'
+ const LEGACY_DRAFT_KEY = `dsh.conversation.${SESSION_ID}`
+ const CURRENT_DRAFT_KEY = `dsh.conversation.${SESSION_ID}`
+@@ -55,7 +56,7 @@ async function quoteAppearance(quote: Locator): Promise<Record<string, string>>
+   })
+ }
+ 
+-const REPLAY: ReplayOverrideDoc = [{
++const REPLAY: ReplayOverrideDoc = Array.from({ length: 2 }, () => ({
+   kind: 'chunks',
+   chunks: [
+     { type: 'block-start', index: 0, blockType: 'text' },
+@@ -64,6 +65,22 @@ const REPLAY: ReplayOverrideDoc = [{
+     { type: 'usage', usage: { inputTokens: 128, outputTokens: 8 } },
+     { type: 'finish', reason: { kind: 'stop' } },
+   ],
++}))
++
++const BRANCH_REASONING = 'Checking the selected passage.\n\nApplying the thermodynamic sign.\nThe reaction needs external work.'
++const BRANCH_REPLY = '**非自发**：\\(\\Delta G>0\\)。\n\n阳极（氧化）：\\[\n2\\mathrm{Cl^-}-2e^-\\rightarrow \\mathrm{Cl_2}\\uparrow\n\\]\n\n分数：\\[\n\\frac{1}{2}\n\\]'
++const BRANCH_REPLAY: ReplayOverrideDoc = [{
++  kind: 'chunks',
++  chunks: [
++    { type: 'block-start', index: 0, blockType: 'reasoning' },
++    { type: 'reasoning-delta', index: 0, text: BRANCH_REASONING },
++    { type: 'block-end', index: 0, block: { type: 'reasoning', text: BRANCH_REASONING } },
++    { type: 'block-start', index: 1, blockType: 'text' },
++    { type: 'text-delta', index: 1, text: BRANCH_REPLY },
++    { type: 'block-end', index: 1, block: { type: 'text', text: BRANCH_REPLY } },
++    { type: 'usage', usage: { inputTokens: 128, outputTokens: 8, reasoningTokens: 18 } },
++    { type: 'finish', reason: { kind: 'stop' } },
++  ],
+ }]
+ 
+ function quoteHistoryFixture(raw: string): string {
+@@ -180,6 +197,15 @@ function otherSessionFixture(raw: string): string {
+   return renderSeedFixture(headerLine, events)
+ }
+ 
++function branchHistoryFixture(raw: string): string {
++  const { headerLine, events } = parseSeedFixture(quoteHistoryFixture(raw))
++  const selected = events.filter(event => event.type === 'turn/start'
++    || event.type === 'user/message' && event.data.id === '{{message:1}}'
++    || event.type === 'step/start' || event.type === 'assistant/message'
++    || event.type === 'step/end' || event.type === 'turn/end')
++  return renderSeedFixture(headerLine, selected.map((event, seq) => ({ ...event, seq, time: seq })))
++}
++
+ async function selectAllText(locator: Locator): Promise<void> {
+   await locator.evaluate((element) => {
+     const range = document.createRange()
+@@ -316,7 +342,9 @@ describe.skipIf(MODE === 'record')('web e2e: rich-text quotes', () => {
+     const createdAt = Date.now() - 60_000
+     await seedSession(scaffold, quoteHistoryFixture(borrowed), SESSION_ID, undefined, { createdAt })
+     await seedSession(scaffold, otherSessionFixture(borrowed), OTHER_ID, undefined, { createdAt: createdAt + 1_000 })
+-    browser = await chromium.launch()
++    browser = await chromium.launch(process.env.DSH_TEST_CHROME_PATH
++      ? { executablePath: process.env.DSH_TEST_CHROME_PATH }
++      : {})
+     page = await newEnglishPage(browser)
+     await pinBrowserClock(page)
+     await page.addInitScript(({ key, value }) => {
+@@ -417,7 +445,7 @@ describe.skipIf(MODE === 'record')('web e2e: rich-text quotes', () => {
+       element.dispatchEvent(new Event('scroll'))
+     })
+     await expect.poll(() => quoteAction.isVisible()).toBe(false)
+-    expect(await page.locator('[data-text-interaction-surface] button').count()).toBe(1)
++    expect(await page.locator('[data-text-interaction-surface] button').count()).toBe(2)
+     await source.scrollIntoViewIfNeeded()
+     await expect.poll(() => quoteAction.isVisible()).toBe(true)
+     await quoteAction.click()
+@@ -519,7 +547,7 @@ describe.skipIf(MODE === 'record')('web e2e: rich-text quotes', () => {
+       return element.getBoundingClientRect().top >= composer.getBoundingClientRect().top
+     })).toBe(true)
+     await expect.poll(() => quoteAction.isVisible()).toBe(false)
+-    expect(await page.locator('[data-text-interaction-surface] button').count()).toBe(1)
++    expect(await page.locator('[data-text-interaction-surface] button').count()).toBe(2)
+     await page.locator('[data-conversation-scroll]').evaluate((element, top) => { element.scrollTop = top }, beforeComposerScroll)
+     await expect.poll(() => quoteAction.isVisible()).toBe(true)
+     await quoteAction.click()
+@@ -648,3 +676,99 @@ describe.skipIf(MODE === 'record')('web e2e: rich-text quotes', () => {
+   })
+ 
+ })
++
++describe.skipIf(MODE === 'record')('web e2e: branch chat', () => {
++  let scaffold: WebScaffold
++  let browser: Browser
++  let page: Page
++  let replayDir: string
++
++  beforeAll(async () => {
++    replayDir = await mkdtemp(join(tmpdir(), 'dsh-branch-chat-replay-'))
++    const replayOverride = join(replayDir, 'replay.override.json')
++    await writeFile(replayOverride, JSON.stringify(BRANCH_REPLAY))
++    scaffold = await launchWebScaffold({ replayFixture: join(replayDir, 'override-only.jsonl'), replayOverride })
++    const borrowed = await readFile(await selectedSessionFixture(BORROWED), 'utf8')
++    await seedSession(scaffold, branchHistoryFixture(borrowed), BRANCH_ID)
++    browser = await chromium.launch(process.env.DSH_TEST_CHROME_PATH
++      ? { executablePath: process.env.DSH_TEST_CHROME_PATH }
++      : {})
++    page = await newEnglishPage(browser)
++    await page.goto(scaffold.authenticatedUrl, { waitUntil: 'load' })
++    const group = page.getByRole('treeitem', { name: /Ungrouped/ })
++    await group.waitFor({ timeout: 15_000 })
++    if (await group.getAttribute('aria-expanded') !== 'true') await group.click()
++    await page.locator(`[data-row-key="session:${BRANCH_ID}"]`).click()
++  }, 120_000)
++
++  afterAll(async () => {
++    await browser?.close()
++    await scaffold?.close()
++    if (replayDir !== undefined) await rm(replayDir, { recursive: true, force: true })
++  })
++
++  it('opens an independent branch beside selected assistant text and keeps it out of the sidebar', async () => {
++    onTestFailed(() => saveFailureShot(page, 'web-e2e-branch-chat'))
++    const source = page.locator('[data-text-interaction-source]').filter({ hasText: 'Quote fixture ready.' }).last()
++    await source.scrollIntoViewIfNeeded()
++    await source.dispatchEvent('pointerdown', { pointerId: 1, pointerType: 'mouse', button: 0, buttons: 1 })
++    await selectAllText(source)
++    await source.dispatchEvent('pointerup', { pointerId: 1, pointerType: 'mouse', button: 0, buttons: 0 })
++    await page.getByRole('button', { name: 'Create branch chat' }).click()
++    const branch = page.getByRole('region', { name: 'Branch chat' })
++    await branch.waitFor()
++    const modelTrigger = branch.getByRole('button', { name: /Select model/ })
++    await expect.poll(() => modelTrigger.count()).toBe(1)
++    await expect.poll(() => modelTrigger.textContent()).toContain('DeepSeek')
++    await modelTrigger.click()
++    await page.getByRole('menuitem', { name: /Model/ }).click()
++    await expect.poll(() => page.getByRole('menuitemradio').count()).toBeGreaterThan(0)
++    await page.keyboard.press('Escape')
++    const size = await branch.boundingBox()
++    expect(size).not.toBeNull()
++    expect(size!.height).toBeGreaterThan(size!.width)
++    expect(await branch.evaluate(element => getComputedStyle(element).backdropFilter)).not.toBe('none')
++    await expect.poll(() => branch.locator('blockquote').textContent()).toContain('Quote fixture ready.')
++    const storedChildId = () => page.evaluate(() => {
++      const saved = JSON.parse(localStorage.getItem('dsh.branch-chat.windows.v1') ?? '[]') as { childId: string }[]
++      return saved[0]?.childId
++    })
++    await expect.poll(storedChildId, { timeout: 15_000 }).toBeTruthy()
++    const childId = await storedChildId()
++    expect(await page.locator(`[data-row-key="session:${childId}"]`).count()).toBe(0)
++    const mainBefore = await page.locator('[data-conversation-scroll]').textContent()
++    await branch.getByRole('textbox', { name: 'Ask about this selection…' }).fill('Why is this useful?')
++    await branch.getByRole('button', { name: 'Send' }).click()
++    await expect.poll(() => branch.textContent(), { timeout: 10_000 }).toContain('非自发')
++    const thinking = branch.getByRole('button', { name: /Thinking/ })
++    await expect.poll(() => thinking.count()).toBe(1)
++    expect(await thinking.textContent()).toContain('Checking the selected passage.')
++    expect(await branch.getByText('Applying the thermodynamic sign.').count()).toBe(0)
++    expect(await branch.getByText('The reaction needs external work.').count()).toBe(0)
++    expect(await branch.locator('.katex').count()).toBeGreaterThan(0)
++    expect(await branch.locator('.katex-display').count()).toBe(2)
++    expect(await branch.locator('.katex .mfrac').count()).toBeGreaterThan(0)
++    expect(await branch.getByText('非自发').evaluate(element => element.tagName)).toBe('STRONG')
++    expect(await branch.innerText()).not.toContain('\\Delta')
++    await thinking.click()
++    await branch.getByText('Applying the thermodynamic sign.').waitFor()
++    await thinking.click()
++    expect(await branch.getByText('Applying the thermodynamic sign.').count()).toBe(0)
++    expect(await branch.locator('article').count()).toBe(2)
++    expect(await branch.textContent()).not.toContain('Current runtime context')
++    expect(await page.locator('[data-conversation-scroll]').textContent()).toBe(mainBefore)
++    const beforeDrag = await branch.boundingBox()
++    const header = await branch.locator('[class*="header"]').boundingBox()
++    expect(beforeDrag).not.toBeNull()
++    expect(header).not.toBeNull()
++    await page.mouse.move(header!.x + 60, header!.y + 20)
++    await page.mouse.down()
++    await page.mouse.move(header!.x - 40, header!.y + 70, { steps: 5 })
++    await page.mouse.up()
++    await expect.poll(async () => (await branch.boundingBox())!.x).toBeLessThan(beforeDrag!.x - 50)
++    await branch.getByRole('button', { name: 'Delete branch chat' }).click()
++    await expect.poll(() => branch.count()).toBe(0)
++    expect(await page.locator(`[data-row-key="session:${childId}"]`).count()).toBe(0)
++  }, 120_000)
++
++})
+diff --git a/packages/client/ui-chat/src/client/chat/ReasoningRow.tsx b/packages/client/ui-chat/src/client/chat/ReasoningRow.tsx
+index a91ef3a..6bb3d79 100644
+--- a/packages/client/ui-chat/src/client/chat/ReasoningRow.tsx
++++ b/packages/client/ui-chat/src/client/chat/ReasoningRow.tsx
+@@ -1,6 +1,6 @@
+ /** Assistant reasoning disclosure, independent of Tool-call presentation. */
+ import { memo, useMemo } from 'react'
+-import { DisclosureRow, IconThinkOutlineRegular, TextShimmer } from '@deepseek-ai/dsh-client-ui-primitives'
++import { DisclosureRow, IconThinkOutlineRegular, TextShimmer, reasoningPreview } from '@deepseek-ai/dsh-client-ui-primitives'
+ import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
+ import type { ChatViewSlotProps, UseDisclosure, UsePresentation } from '../contract/slots.ts'
+ import { reasoningText } from '../reasoning-text.ts'
+@@ -9,28 +9,6 @@ import css from './ReasoningRow.module.css'
+ 
+ const THINK_ICON = <IconThinkOutlineRegular size={14} />
+ 
+-function firstLine(text: string): string {
+-  const newline = text.indexOf('\n')
+-  return newline === -1 ? text : text.slice(0, newline)
+-}
+-
+-function latestCompletedParagraphFirstLine(text: string): string {
+-  let summary = ''
+-  let paragraphStart = 0
+-  const separator = /\r?\n(?:[\t ]*\r?\n)+/g
+-  while (true) {
+-    const nextParagraph = separator.exec(text)
+-    const paragraphEnd = nextParagraph === null ? text.length
+-      : nextParagraph.index + nextParagraph[0].indexOf('\n')
+-    const newline = text.indexOf('\n', paragraphStart)
+-    if (newline !== -1 && newline <= paragraphEnd) {
+-      const candidate = text.slice(paragraphStart, newline).trim()
+-      if (candidate !== '') summary = candidate
+-    }
+-    if (nextParagraph === null) return summary
+-    paragraphStart = nextParagraph.index + nextParagraph[0].length
+-  }
+-}
+ 
+ /**
+  * Render one assistant reasoning block collapsed until the reader opens it. The
+@@ -61,8 +39,7 @@ export const ReasoningRow = memo(function ReasoningRow({
+     const text = reasoningText(rawText)
+     return { text, hidden: text !== rawText && text.trim() === '' }
+   }, [rawText])
+-  const summaryText = running ? latestCompletedParagraphFirstLine(text) : firstLine(text)
+-  const summary = useMemo(() => summaryText.replaceAll('**', ''), [summaryText])
++  const summary = useMemo(() => reasoningPreview(rawText, running), [rawText, running])
+   const preview = usePresentation(policy => !expanded && summary !== ''
+     && (running || policy.settledReasoningPreview))
+   const collapsedContent = useMemo(() => (
+diff --git a/packages/client/ui-chat/src/client/reasoning-text.ts b/packages/client/ui-chat/src/client/reasoning-text.ts
+index c690e87..22d6116 100644
+--- a/packages/client/ui-chat/src/client/reasoning-text.ts
++++ b/packages/client/ui-chat/src/client/reasoning-text.ts
+@@ -1,25 +1,2 @@
+-/** Display text preparation for model reasoning. */
+-
+-/**
+- * Prepare complete or streaming reasoning for display.
+- * @param text - original complete or streaming reasoning.
+- * @returns display text, or empty text when no displayable content is available.
+- */
+-export function reasoningText(text: string): string {
+-  if (text[0] !== '<') return text
+-  /* v8 ignore start -- Custom rendering behavior is outside unit coverage. */
+-  const opening = '<signature>'
+-  if (opening.startsWith(text)) return ''
+-  if (!text.startsWith(opening)) return text
+-  const closing = '</signature>'
+-  const end = text.indexOf(closing, opening.length)
+-  if (end === -1) return ''
+-  let start = end + closing.length
+-  while (start < text.length) {
+-    if (text[start] === '\n') start++
+-    else if (text[start] === '\r' && text[start + 1] === '\n') start += 2
+-    else break
+-  }
+-  return text.slice(start)
+-  /* v8 ignore stop */
+-}
++/** Backward-compatible main-chat import for shared reasoning display preparation. */
++export { reasoningText } from '@deepseek-ai/dsh-client-ui-primitives'
+diff --git a/packages/client/ui-layout/src/client/index.ts b/packages/client/ui-layout/src/client/index.ts
+index aec2430..3fa80c0 100644
+--- a/packages/client/ui-layout/src/client/index.ts
++++ b/packages/client/ui-layout/src/client/index.ts
+@@ -52,6 +52,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
+   }
+ 
+   interface SlotMap {
++    /** Session-bound model picker inside a floating branch chat. */
++    'branch.chat.model': { kind: 'single'; scope: 'session'; owner: { locked: boolean } }
+     // The 'root' entry itself is the runtime's built-in slot (declared
+     // there); these are the frame's children, declared by the same
+     // register() call that contributes AppFrame. Session owners never pass
+diff --git a/packages/client/ui-model-selection/package.json b/packages/client/ui-model-selection/package.json
+index 24a4e1f..c523bdc 100644
+--- a/packages/client/ui-model-selection/package.json
++++ b/packages/client/ui-model-selection/package.json
+@@ -53,6 +53,7 @@
+     "@deepseek-ai/dsh-client-test-runtime": "workspace:*",
+     "@deepseek-ai/dsh-client-ui-commands": "workspace:*",
+     "@deepseek-ai/dsh-client-ui-conversation": "workspace:*",
++    "@deepseek-ai/dsh-client-ui-layout": "workspace:*",
+     "@deepseek-ai/dsh-client-ui-input-trigger": "workspace:*",
+     "@deepseek-ai/dsh-client-ui-primitives": "workspace:*",
+     "@deepseek-ai/dsh-client-ui-slots": "workspace:*",
+diff --git a/packages/client/ui-model-selection/src/client/index.ts b/packages/client/ui-model-selection/src/client/index.ts
+index b91ee20..655f6a5 100644
+--- a/packages/client/ui-model-selection/src/client/index.ts
++++ b/packages/client/ui-model-selection/src/client/index.ts
+@@ -12,16 +12,20 @@
+  */
+ // Type-only: the carrier types, the forwarded Host-event face and the ctx.remote merge.
+ import type { ModelSelection } from '@deepseek-ai/dsh-api-session-controller/types'
++import type { SessionId } from '@deepseek-ai/dsh-session/types'
+ import type {} from '@deepseek-ai/dsh-api-session-controller/client'
+ import type { Context as ClientContext } from '@deepseek-ai/cordis'
++import { createElement, type ComponentProps, type ReactNode } from 'react'
+ import type { CommandUiContract, SelectOption } from '@deepseek-ai/dsh-client-ui-commands/client'
+ // Type-only: pulls the ui-conversation SlotMap merge (the input.model seat).
+ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
++import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+ // Type-only: pulls the locale plugin's Context merge (ctx.locale).
+ import type {} from '@deepseek-ai/dsh-client-locale/client'
+ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+ import type {} from '@deepseek-ai/dsh-client-ui-session/client'
+ import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
++import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+ import { IconDataOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
+ import type { ModelDirectoryState } from './directory.ts'
+ import { ModelDirectoryResolver } from './service.ts'
+@@ -103,6 +107,12 @@ function selectionOf(state: ModelDirectoryState, id: string): ModelSelection | u
+ /** Dictionary namespace owned by this plugin. */
+ const NS = 'model'
+ 
++/** The same picker UI in a branch; its optional composer-only extensions stay in the composer. */
++function BranchModelSelect(props: ModelSelectInjected & Pick<PropsRuntime<'branch.chat.model'>, 'locked'> & PropsLocale<'model'>) {
++  const renderSlot = ((_slot: string, _owner: unknown, options?: { fallback?: ReactNode }) => options?.fallback ?? null) as ComponentProps<typeof ModelSelect>['renderSlot']
++  return createElement(ModelSelect, { ...props, renderSlot })
++}
++
+ /** Required services: the contribution registry, the seat's slot registry, locale, and the service's own faces. */
+ export const inject = ['commandUi', 'locale', 'sessions', 'slots', 'remote', 'remote.session']
+ 
+@@ -169,27 +179,32 @@ export function apply(ctx: ClientContext): void {
+   ctx.inject(['slots', 'modelDirectories'], (scope: ClientContext) => {
+     const models = scope.modelDirectories
+     const sessions = scope.sessions
++    const injectModel = (sessionId: SessionId): ModelSelectInjected => {
++      const directory = models.directoryFor(sessionId)
++      const available = sessions.subagentAddress(sessionId) === undefined
++      return {
++        available,
++        directory: directory.store,
++        load: () => {
++          if (available) directory.load().catch(() => { /* surfaced on the store */ })
++        },
++        resolveText: text => ctx.locale.resolveText(text),
++        select: (selection: ModelSelection) => available
++          ? directory.select(selection)
++          : Promise.resolve(undefined),
++      }
++    }
+     scope.slots.inject('conversation.input.model', () => scope.slots.register({
+       name: 'conversation.input.model',
+       locale: NS,
+       children: {
+         'conversation.input.model.label': { kind: 'single', scope: 'session', inline: true },
++        'conversation.input.model.options': { kind: 'list', scope: 'session' },
+       },
+-      inject: (sessionId): ModelSelectInjected => {
+-        const directory = models.directoryFor(sessionId)
+-        const available = sessions.subagentAddress(sessionId) === undefined
+-        return {
+-          available,
+-          directory: directory.store,
+-          load: () => {
+-            if (available) directory.load().catch(() => { /* surfaced on the store */ })
+-          },
+-          resolveText: text => ctx.locale.resolveText(text),
+-          select: (selection: ModelSelection) => available
+-            ? directory.select(selection)
+-            : Promise.resolve(undefined),
+-        }
+-      },
++      inject: injectModel,
+     }, ModelSelect))
++    scope.slots.inject('branch.chat.model', () => scope.slots.register({
++      name: 'branch.chat.model', locale: NS, inject: injectModel,
++    }, BranchModelSelect))
+   })
+ }
+diff --git a/packages/client/ui-model-selection/tsconfig.json b/packages/client/ui-model-selection/tsconfig.json
+index 862648d..60e02ad 100644
+--- a/packages/client/ui-model-selection/tsconfig.json
++++ b/packages/client/ui-model-selection/tsconfig.json
+@@ -32,6 +32,9 @@
+     {
+       "path": "../ui-conversation/tsconfig.client.json"
+     },
++    {
++      "path": "../ui-layout"
++    },
+     {
+       "path": "../ui-primitives"
+     },
+diff --git a/packages/client/ui-primitives/src/index.ts b/packages/client/ui-primitives/src/index.ts
+index 13f9986..be53d73 100644
+--- a/packages/client/ui-primitives/src/index.ts
++++ b/packages/client/ui-primitives/src/index.ts
+@@ -38,11 +38,10 @@ export type { MenuSurfaceProps } from './MenuSurface.tsx'
+ export { MenuGroup, observeStickyMenuGroups } from './MenuGroup.tsx'
+ export type { MenuItemButtonProps, MenuEntry, MenuItem, MenuSeparator, MenuLabel } from './Menu.tsx'
+ export { useAnchoredMaxHeight } from './useAnchoredMaxHeight.ts'
+-export { useAnchoredPosition } from './useAnchoredPosition.ts'
+-export type { AnchoredPositionOptions } from './useAnchoredPosition.ts'
+ export { useDismissOnOutsidePointer } from './useDismissOnOutsidePointer.ts'
+ export { HoverCard } from './HoverCard.tsx'
+ export { HoverCardGroup } from './HoverCardGroup.tsx'
++export { usePointerGrace } from './pointer-grace.ts'
+ export { ShortcutKeys } from './ShortcutKeys.tsx'
+ export { observeComposition } from './keyboard-composition.ts'
+ export { focusWithoutRing, isMobileDevice } from './focus.ts'
+@@ -123,6 +122,7 @@ export type { MarkdownDelegate, MarkdownDelegateProviderProps, MarkdownExternalL
+ export { DetailDocument, detailDocumentState, useDetailDocumentLabels } from './DetailDocument.tsx'
+ export type { DetailDocumentCopy, DetailDocumentLabels, DetailDocumentRead, DetailDocumentState } from './DetailDocument.tsx'
+ export { MarkdownText } from './markdown/MarkdownText.tsx'
++export { reasoningText, reasoningPreview } from './reasoning-preview.ts'
+ export type { MarkdownCodeLabels, MarkdownFileMentions, MarkdownLabels, MarkdownPathImages } from './markdown/MarkdownText.tsx'
+ export { extractMarkdownPlainText } from './markdown/plain-text.ts'
+ export type { MarkdownPlainTextMode, MarkdownPlainTextOptions } from './markdown/plain-text.ts'
+diff --git a/packages/client/ui-primitives/src/reasoning-preview.ts b/packages/client/ui-primitives/src/reasoning-preview.ts
+new file mode 100644
+index 0000000..3423911
+--- /dev/null
++++ b/packages/client/ui-primitives/src/reasoning-preview.ts
+@@ -0,0 +1,48 @@
++/** Display preparation shared by the main transcript and branch conversations. */
++
++export function reasoningText(text: string): string {
++  if (text[0] !== '<') return text
++  const opening = '<signature>'
++  if (opening.startsWith(text)) return ''
++  if (!text.startsWith(opening)) return text
++  const closing = '</signature>'
++  const end = text.indexOf(closing, opening.length)
++  if (end === -1) return ''
++  let start = end + closing.length
++  while (start < text.length) {
++    if (text[start] === '\n') start++
++    else if (text[start] === '\r' && text[start + 1] === '\n') start += 2
++    else break
++  }
++  return text.slice(start)
++}
++
++function firstLine(text: string): string {
++  const newline = text.indexOf('\n')
++  return newline === -1 ? text : text.slice(0, newline)
++}
++
++function latestCompletedParagraphFirstLine(text: string): string {
++  let summary = ''
++  let paragraphStart = 0
++  const separator = /\r?\n(?:[\t ]*\r?\n)+/g
++  while (true) {
++    const nextParagraph = separator.exec(text)
++    const paragraphEnd = nextParagraph === null ? text.length
++      : nextParagraph.index + nextParagraph[0].indexOf('\n')
++    const newline = text.indexOf('\n', paragraphStart)
++    if (newline !== -1 && newline <= paragraphEnd) {
++      const candidate = text.slice(paragraphStart, newline).trim()
++      if (candidate !== '') summary = candidate
++    }
++    if (nextParagraph === null) return summary
++    paragraphStart = nextParagraph.index + nextParagraph[0].length
++  }
++}
++
++/** The exact single-line summary policy used by the native transcript. */
++export function reasoningPreview(text: string, running: boolean): string {
++  const display = reasoningText(text)
++  const summary = running ? latestCompletedParagraphFirstLine(display) : firstLine(display)
++  return summary.replaceAll('**', '')
++}
+diff --git a/packages/client/ui-primitives/tests/reasoning-preview.client.spec.ts b/packages/client/ui-primitives/tests/reasoning-preview.client.spec.ts
+new file mode 100644
+index 0000000..7a1a328
+--- /dev/null
++++ b/packages/client/ui-primitives/tests/reasoning-preview.client.spec.ts
+@@ -0,0 +1,16 @@
++import { describe, expect, it } from 'vitest'
++import { reasoningPreview, reasoningText } from '../src/reasoning-preview.ts'
++
++describe('shared reasoning progress summary', () => {
++  it('advances only from real completed paragraph headings while streaming', () => {
++    expect(reasoningPreview('**Checking context**', true)).toBe('')
++    expect(reasoningPreview('**Checking context**\n\nApplying', true)).toBe('Checking context')
++    expect(reasoningPreview('**Checking context**\n\n**Applying signs**\nMore detail', true)).toBe('Applying signs')
++    expect(reasoningPreview('**Checking context**\n\n**Applying signs**\nMore detail', false)).toBe('Checking context')
++  })
++
++  it('hides an incomplete signature prelude just like the main transcript', () => {
++    expect(reasoningText('<signature>unfinished')).toBe('')
++    expect(reasoningPreview('<signature>hidden</signature>\nActual thought', false)).toBe('Actual thought')
++  })
++})
+diff --git a/packages/client/ui-workspace/src/client/tree.ts b/packages/client/ui-workspace/src/client/tree.ts
+index 054c584..e5a1984 100644
+--- a/packages/client/ui-workspace/src/client/tree.ts
++++ b/packages/client/ui-workspace/src/client/tree.ts
+@@ -233,6 +233,14 @@ function sessionVisible(
+   archivedFilter: ArchivedFilter,
+ ): boolean {
+   if (session.origin === 'subagent') return false
++  // Branch windows own their forked Sessions; the local marker keeps their
++  // model histories out of the ordinary Workspace conversation list.
++  try {
++    if (typeof localStorage !== 'undefined'
++      && localStorage.getItem(`dsh.branch-chat.hidden.${session.id}`) === '1') return false
++  } catch {
++    // Storage refusal leaves the Host catalog visible instead of silently hiding data.
++  }
+   if (session.blank && session.id !== current) return false
+   switch (archivedFilter) {
+     case 'default':
+diff --git a/packages/client/ui-workspace/tests/tree.client.spec.ts b/packages/client/ui-workspace/tests/tree.client.spec.ts
+index b754980..7954185 100644
+--- a/packages/client/ui-workspace/tests/tree.client.spec.ts
++++ b/packages/client/ui-workspace/tests/tree.client.spec.ts
+@@ -1,4 +1,4 @@
+-import { describe, expect, it } from 'vitest'
++import { describe, expect, it, vi } from 'vitest'
+ import type {
+   SessionListState, SessionProjectionMap, SessionSummary,
+ } from '@deepseek-ai/dsh-api-session-controller/client'
+@@ -17,6 +17,17 @@ import {
+ import { createWorkspaceViewStore } from '../src/client/stores.ts'
+ 
+ const sid = (id: string) => id as SessionId
++
++it('keeps a branch child out of every sidebar filter while retaining its parent', () => {
++  vi.stubGlobal('localStorage', { getItem: (key: string) => key === 'dsh.branch-chat.hidden.child' ? '1' : null })
++  try {
++    const sessions = list(summary('parent', 2), summary('child', 1))
++    expect(visibleSessionIds(sessions, [], 'default')).toEqual([sid('parent')])
++    expect(visibleSessionIds(sessions, [], 'show')).toEqual([sid('parent')])
++  } finally {
++    vi.unstubAllGlobals()
++  }
++})
+ const wid = (id: string) => id as WorkspaceId
+ const summary = (id: string, updatedAt: number, cwd?: string): SessionSummary => ({
+   id: sid(id), title: id, displayTitle: id, running: false, blank: false,
+diff --git a/packages/session/message-quotes/README.md b/packages/session/message-quotes/README.md
+index 60ecd38..300469a 100644
+--- a/packages/session/message-quotes/README.md
++++ b/packages/session/message-quotes/README.md
+@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
+ 
+ ## Summary
+ 
+-`dsh-message-quotes` registers quotation controls and transcript rendering on the Client. Messages retain ordinary Markdown text without quote metadata or content indexes.
++`dsh-message-quotes` registers quotation and branch-chat controls on selected conversation text. Messages retain ordinary Markdown text without quote metadata or content indexes.
+ 
+ ## Table of Contents
+ 
+@@ -25,7 +25,7 @@ English | [中文](README.zh.md)
+ <a id="use-this-package"></a>
+ ## Use this package
+ 
+-The Web bundle mounts this plugin. Its Client entry registers the selection action with `ctx.uiConversation.interactions` and renders quotes through UserText rules. Registrations are removed when the plugin unloads. The selection button uses the shared floating-surface stroke and shadow.
++The Web bundle mounts this plugin. Its Client entry registers selection actions with `ctx.uiConversation.interactions` and renders quotes through UserText rules. A branch action forks the latest completed prefix of the current Session, then opens a draggable window beside the selection. Branch prompts and replies use the forked Session log and never enter the parent transcript. Branch children are hidden from the Workspace conversation list on this device; window placement is stored in browser-local storage. Deleting a window removes its local presentation and releases its Client reference but retains the hidden child Session log. Registrations are removed when the plugin unloads.
+ 
+ -----
+ 
+@@ -66,6 +66,8 @@ Quote text and its line prefixes contribute ordinary input tokens.
+ 
+ The plugin rewrites no history. Consumers append the encoded text as user content after the existing prefix.
+ 
++Branch prompts include the selected text as a Markdown blockquote. The forked child inherits the parent's latest completed conversation prefix; follow-up turns remain in that child only.
++
+ ## Known Limitations and Deferred Work
+ 
+ <a id="known-limitations-and-deferred-work"></a>
+diff --git a/packages/session/message-quotes/README.zh.md b/packages/session/message-quotes/README.zh.md
+index 91d95c4..4e1fea9 100644
+--- a/packages/session/message-quotes/README.zh.md
++++ b/packages/session/message-quotes/README.zh.md
+@@ -9,7 +9,7 @@ kind: "package-reference"
+ 
+ ## 概述
+ 
+-`dsh-message-quotes` 在 Client 注册引用控件和转录渲染。消息保留普通 Markdown 文本，无需 quote 元数据或 content 索引。
++`dsh-message-quotes` 在 Client 注册引用和分支聊天控件。消息保留普通 Markdown 文本，无需 quote 元数据或 content 索引。
+ 
+ ## 目录
+ 
+@@ -25,7 +25,7 @@ kind: "package-reference"
+ <a id="use-this-package"></a>
+ ## 使用本包
+ 
+-Web bundle 挂载此插件。Client 入口向 `ctx.uiConversation.interactions` 注册选区操作，并通过 UserText 规则渲染引用。插件卸载时会移除这些注册。选区按钮使用共享浮层描边与阴影。
++Web bundle 挂载此插件。Client 入口向 `ctx.uiConversation.interactions` 注册选区操作，并通过 UserText 规则渲染引用。用户选择“创建分支聊天”时，应用复制当前会话截至最近一个已完成回合的内容，在所选文字旁打开可拖动窗口。分支问答保存在复制出的会话里，不进入主聊天正文。分支会话在本机的左侧聊天记录中隐藏；窗口位置保存在浏览器本地存储中。删除窗口会移除本地窗口并释放运行中的会话引用，但保留隐藏的分支会话记录。插件卸载时会移除注册。
+ 
+ -----
+ 
+@@ -66,6 +66,8 @@ Web bundle 挂载此插件。Client 入口向 `ctx.uiConversation.interactions`
+ 
+ 该插件不改写历史。消费方将编码文本作为用户内容追加到现有前缀之后。
+ 
++分支提问会把选中文字作为 Markdown 引用一并发送。分支会话继承主聊天最近一个已完成回合之前的上下文；后续追问只进入分支会话。
++
+ ## 已知限制与后续工作
+ 
+ <a id="known-limitations-and-deferred-work"></a>
+diff --git a/packages/session/message-quotes/package.json b/packages/session/message-quotes/package.json
+index 9e0b168..833a172 100644
+--- a/packages/session/message-quotes/package.json
++++ b/packages/session/message-quotes/package.json
+@@ -40,8 +40,10 @@
+     "@deepseek-ai/cordis": "workspace:~",
+     "@deepseek-ai/dsh-api-session-controller": "workspace:*",
+     "@deepseek-ai/dsh-client-locale": "workspace:*",
++    "@deepseek-ai/dsh-client-store": "workspace:*",
+     "@deepseek-ai/dsh-client-ui-chat": "workspace:*",
+     "@deepseek-ai/dsh-client-ui-conversation": "workspace:*",
++    "@deepseek-ai/dsh-client-ui-layout": "workspace:*",
+     "@deepseek-ai/dsh-client-ui-renderer": "workspace:*",
+     "@deepseek-ai/dsh-client-ui-slots": "workspace:*",
+     "@deepseek-ai/dsh-client-ui-primitives": "workspace:*",
+@@ -54,8 +56,10 @@
+       "inject": [
+         "@deepseek-ai/dsh-api-session-controller",
+         "@deepseek-ai/dsh-client-locale",
++        "@deepseek-ai/dsh-client-store",
+         "@deepseek-ai/dsh-client-ui-chat",
+         "@deepseek-ai/dsh-client-ui-conversation",
++        "@deepseek-ai/dsh-client-ui-layout",
+         "@deepseek-ai/dsh-client-ui-renderer"
+       ],
+       "platform": "web"
+diff --git a/packages/session/message-quotes/src/client/BranchChatOverlay.module.css b/packages/session/message-quotes/src/client/BranchChatOverlay.module.css
+new file mode 100644
+index 0000000..ff2647b
+--- /dev/null
++++ b/packages/session/message-quotes/src/client/BranchChatOverlay.module.css
+@@ -0,0 +1,159 @@
++.card {
++  position: fixed;
++  z-index: 950;
++  display: flex;
++  flex-direction: column;
++  width: min(420px, calc(100vw - 24px), 65dvh);
++  height: min(700px, calc(100dvh - 24px));
++  border: 0;
++  border-radius: 22px;
++  background: var(--dsw-specific-menu);
++  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
++  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
++  backdrop-filter: var(--dsw-menu-backdrop-filter);
++  box-shadow: var(--dsw-elevation-prominent);
++  color: var(--dsw-alias-label-primary);
++  isolation: isolate;
++  overflow: hidden;
++}
++
++.card::before {
++  position: absolute;
++  inset: 0;
++  border-radius: inherit;
++  background: linear-gradient(145deg, var(--dsw-alias-border-l4), transparent 32%);
++  content: '';
++  opacity: 0.45;
++  pointer-events: none;
++  z-index: -1;
++}
++
++.header {
++  display: flex;
++  align-items: center;
++  min-height: 54px;
++  padding: 0 14px 0 20px;
++  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
++  cursor: grab;
++  touch-action: none;
++  user-select: none;
++}
++
++.header:active { cursor: grabbing; }
++.title { flex: 1; font: var(--dsw-font-xs-13); color: var(--dsw-alias-label-primary); }
++.delete {
++  display: grid;
++  place-items: center;
++  width: 28px;
++  height: 28px;
++  border: 0;
++  border-radius: var(--dsw-radius-sm);
++  background: transparent;
++  color: var(--dsw-alias-label-secondary);
++  font-size: 20px;
++  cursor: pointer;
++}
++@media (hover: hover) { .delete:hover { background: var(--dsw-alias-interactive-bg-hover); } }
++.delete:focus-visible { box-shadow: 0 0 0 2px var(--dsw-focus-ring-color); }
++
++.body {
++  flex: 1;
++  min-height: 0;
++  overflow: auto;
++  padding: 20px 18px 12px;
++  font: var(--dsw-font-xs-13);
++  line-height: 1.6;
++}
++.quote {
++  margin: 0 0 22px;
++  padding: 11px 13px;
++  border: 0;
++  border-radius: 12px;
++  background: var(--dsw-alias-interactive-bg-hover);
++  color: var(--dsw-alias-label-secondary);
++  white-space: pre-wrap;
++  overflow-wrap: anywhere;
++  max-height: 110px;
++  overflow: auto;
++}
++.userMessage, .assistantMessage { margin: 14px 0; overflow-wrap: anywhere; }
++.userMessage {
++  white-space: pre-wrap;
++  width: fit-content;
++  max-width: 88%;
++  margin-left: auto;
++  padding: 10px 13px;
++  border-radius: 13px;
++  background: var(--dsw-alias-interactive-bg-hover);
++}
++.assistantMessage { padding: 0 2px; min-width: 0; }
++.assistantMessage > :last-child :first-child { margin-top: 0; }
++.reasoning { margin: 0 0 12px; color: var(--dsw-alias-label-secondary); }
++.reasoningToggle {
++  display: flex;
++  align-items: center;
++  width: 100%;
++  min-width: 0;
++  gap: 6px;
++  padding: 3px 0;
++  border: 0;
++  background: transparent;
++  color: inherit;
++  text-align: left;
++  cursor: pointer;
++}
++.reasoningToggle:focus-visible { box-shadow: 0 0 0 2px var(--dsw-focus-ring-color); }
++.reasoningLabel { flex: none; font: var(--dsw-font-xs-13); }
++.reasoningSummary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-caption); }
++.reasoningBody { padding: 6px 0 0 20px; }
++.status { color: var(--dsw-alias-label-secondary); margin: 8px 2px; }
++.error { color: var(--dsw-alias-state-error-primary); margin: 8px 2px; }
++
++.composer {
++  display: flex;
++  flex-direction: column;
++  gap: 6px;
++  margin: 0 14px 14px;
++  padding: 10px 10px 8px;
++  border: 0;
++  border-radius: var(--dsw-radius-panel);
++  --dsw-elevation-stroke-color: var(--dsw-alias-border-l2);
++  background: var(--dsw-specific-input-major);
++  box-shadow: var(--dsw-elevation-soft);
++}
++.composer:focus-within { --dsw-elevation-stroke-color: var(--dsw-alias-state-business-primary); }
++.composer textarea {
++  width: 100%;
++  min-height: 54px;
++  max-height: 160px;
++  resize: none;
++  border: 0;
++  outline: none;
++  background: transparent;
++  color: inherit;
++  padding: 3px 7px;
++  font: var(--dsw-font-markdown-base);
++  line-height: 24px;
++}
++.composer textarea::placeholder { color: var(--dsw-alias-label-caption); }
++.composerBottom { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
++.modelSeat { min-width: 0; max-width: calc(100% - 44px); }
++.send {
++  display: grid;
++  place-items: center;
++  flex: none;
++  width: 34px;
++  height: 34px;
++  border: 0;
++  border-radius: 999px;
++  corner-shape: round;
++  background: var(--dsw-alias-button-info-fill);
++  color: #fff;
++  cursor: pointer;
++  transform: translateY(-2px);
++}
++@media (hover: hover) { .send:hover:not(:disabled) { background: var(--dsw-alias-button-info-hover); } }
++.send:disabled { opacity: 0.4; cursor: default; }
++.send:focus-visible { box-shadow: 0 0 0 2px var(--dsw-focus-ring-color); }
++
++@media (max-width: 600px) { .card { border-radius: 18px; } .header { padding-left: 16px; } }
+diff --git a/packages/session/message-quotes/src/client/BranchChatOverlay.tsx b/packages/session/message-quotes/src/client/BranchChatOverlay.tsx
+new file mode 100644
+index 0000000..e83797b
+--- /dev/null
++++ b/packages/session/message-quotes/src/client/BranchChatOverlay.tsx
+@@ -0,0 +1,154 @@
++/** Floating branch windows for the selected main conversation. */
++import { useMemo, useRef, useState } from 'react'
++import type { SessionReference } from '@deepseek-ai/dsh-api-session-controller/client'
++import { IconThinkOutlineRegular, MarkdownText, TextShimmer, reasoningPreview, reasoningText, type MarkdownLabels } from '@deepseek-ai/dsh-client-ui-primitives'
++import type { HostObservable, InjectFace, PropsLocale, PropsRenderSlots, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
++import type { BranchAnchor, BranchWindow } from './branch-chat.ts'
++import { normalizeBranchMath } from './branch-math.ts'
++import type { NS } from './locales.ts'
++import css from './BranchChatOverlay.module.css'
++
++/** Callbacks and live windows provided by the branch controller. */
++export interface BranchOverlayInjected {
++  hooks: { branches: HostObservable<readonly BranchWindow[]> }
++  sendBranch: (id: string, question: string) => Promise<void>
++  moveBranch: (id: string, anchor: BranchAnchor) => void
++  removeBranch: (id: string) => void
++  referenceFor: (id: string) => SessionReference | undefined
++}
++
++/** Root overlay props, independent of the selection toolbar's lifetime. */
++export type BranchOverlayProps = PropsRuntime<'shell.overlay'> & PropsRenderSlots<'branch.chat.model'>
++  & PropsLocale<typeof NS> & InjectFace<BranchOverlayInjected>
++
++/**
++ * Show only windows attached to the current main conversation.
++ * @param props - current session, branch controller, and locale bindings.
++ * @returns draggable branch windows or nothing.
++ */
++export function BranchChatOverlay({ useSessions, useBranches, sendBranch, moveBranch, removeBranch, referenceFor, renderSlot, SessionProvider, t }: BranchOverlayProps) {
++  const currentId = useSessions(state => Object.values(state.byId)
++    .find(row => (row.retainedBy.mainView ?? 0) > 0)?.id)
++  const branches = useBranches(rows => rows)
++  if (currentId === undefined) return null
++  return <>{branches.filter(row => row.parentId === currentId).map(row => (
++    <BranchCard key={row.id} branch={row} reference={referenceFor(row.id)}
++      renderSlot={renderSlot} SessionProvider={SessionProvider}
++      send={sendBranch} move={moveBranch} remove={removeBranch} t={t} />
++  ))}</>
++}
++
++/** One window keeps its unsent draft and drag gesture local to this mount. */
++function BranchCard({ branch, reference, renderSlot, SessionProvider, send, move, remove, t }: {
++  branch: BranchWindow
++  reference: SessionReference | undefined
++  renderSlot: BranchOverlayProps['renderSlot']
++  SessionProvider: BranchOverlayProps['SessionProvider']
++  send: BranchOverlayInjected['sendBranch']
++  move: BranchOverlayInjected['moveBranch']
++  remove: BranchOverlayInjected['removeBranch']
++  t: BranchOverlayProps['t']
++}) {
++  const [draft, setDraft] = useState('')
++  const labels = useMemo<MarkdownLabels>(() => ({
++    code: {
++      copyLabel: t('branch.copy'), copiedLabel: t('branch.copied'),
++      toolbarLabels: { codeLabel: t('branch.code'), wrapLabel: t('branch.wrap'), unwrapLabel: t('branch.unwrap') },
++    },
++    footnotes: t('branch.footnotes'),
++  }), [t])
++  const [position, setPosition] = useState<BranchAnchor>({ x: branch.x, y: branch.y })
++  const positionRef = useRef(position)
++  const drag = useRef<{ pointerId: number; x: number; y: number; left: number; top: number } | null>(null)
++  const submit = (): void => {
++    const text = draft.trim()
++    if (text === '' || branch.loading || branch.running || branch.error !== null || branch.childId === undefined) return
++    setDraft('')
++    void send(branch.id, text)
++  }
++  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>): void => {
++    if (event.button !== 0 || event.target instanceof Element && event.target.closest('button')) return
++    event.currentTarget.setPointerCapture(event.pointerId)
++    drag.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, left: position.x, top: position.y }
++  }
++  const onPointerMove = (event: React.PointerEvent<HTMLDivElement>): void => {
++    const start = drag.current
++    if (start?.pointerId !== event.pointerId) return
++    const card = event.currentTarget.parentElement?.getBoundingClientRect()
++    const next = {
++      x: Math.max(8, Math.min(start.left + event.clientX - start.x, window.innerWidth - (card?.width ?? 80) - 8)),
++      y: Math.max(8, Math.min(start.top + event.clientY - start.y, window.innerHeight - (card?.height ?? 55) - 8)),
++    }
++    positionRef.current = next
++    setPosition(next)
++  }
++  const onPointerEnd = (event: React.PointerEvent<HTMLDivElement>): void => {
++    if (drag.current?.pointerId !== event.pointerId) return
++    drag.current = null
++    move(branch.id, positionRef.current)
++  }
++  const hasLiveOutput = branch.messages.some(message => message.live === true)
++  const showWaiting = branch.running && !branch.loading && !hasLiveOutput
++    && branch.messages.at(-1)?.role !== 'assistant'
++  return <section className={css.card} style={{ left: position.x, top: position.y }} aria-label={t('branch.title')}>
++    <div className={css.header} onPointerDown={onPointerDown} onPointerMove={onPointerMove}
++      onPointerUp={onPointerEnd} onPointerCancel={onPointerEnd}>
++      <span className={css.title}>{t('branch.title')}</span>
++      <button type="button" className={css.delete} aria-label={t('branch.delete')} title={t('branch.delete')}
++        onClick={() => { remove(branch.id) }}>×</button>
++    </div>
++    <div className={css.body}>
++      <blockquote className={css.quote}>{branch.quote}</blockquote>
++      {branch.messages.map(message => <article key={`${message.seq}-${message.role}`}
++        className={message.role === 'user' ? css.userMessage : css.assistantMessage}>
++        {message.reasoning !== undefined && message.reasoning.trim() !== ''
++          && <BranchReasoning text={message.reasoning} live={message.live === true} labels={labels} t={t} />}
++        {message.text !== '' && <MarkdownText text={normalizeBranchMath(message.text)} streaming={message.live === true} labels={labels} />}
++      </article>)}
++      {branch.loading && <p className={css.status}>{t('branch.loading')}</p>}
++      {showWaiting && <p className={css.status}>{t('branch.waiting')}</p>}
++      {branch.error !== null && <p className={css.error} role="alert">{t('branch.error', { message: branch.error })}</p>}
++    </div>
++    <div className={css.composer}>
++      <textarea value={draft} onChange={event => { setDraft(event.target.value) }}
++        onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit() } }}
++        placeholder={t('branch.placeholder')} aria-label={t('branch.placeholder')}
++        disabled={branch.loading || branch.running || branch.error !== null || branch.childId === undefined} rows={3} />
++      <div className={css.composerBottom}>
++        <div className={css.modelSeat}>{reference === undefined ? null : <SessionProvider session={reference}>
++          {renderSlot('branch.chat.model', { locked: branch.loading || branch.running })}
++        </SessionProvider>}</div>
++        <button type="button" onClick={submit} disabled={branch.loading || branch.running || branch.error !== null || draft.trim() === ''}
++          aria-label={t('branch.send')} className={css.send}>
++          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden>
++            <path d="M8.3125 0.980183C8.66767 1.0531 8.97902 1.20418 9.2627 1.43233C9.48724 1.61297 9.73029 1.85793 9.97949 2.10714L14.707 6.83468L13.293 8.24874L9 3.95577V15.0417H7V3.95577L2.70703 8.24874L1.29297 6.83468L6.02051 2.10714C6.26971 1.85793 6.51277 1.61297 6.7373 1.43233C6.97662 1.23986 7.28445 1.04402 7.6875 0.980183C7.8973 0.947006 8.1031 0.95516 8.3125 0.980183Z" fill="currentColor" />
++          </svg>
++        </button>
++      </div>
++    </div>
++  </section>
++}
++
++/** Native one-line reasoning progress; the complete model text is opt-in. */
++function BranchReasoning({ text, live, labels, t }: {
++  text: string
++  live: boolean
++  labels: MarkdownLabels
++  t: BranchOverlayProps['t']
++}) {
++  const [expanded, setExpanded] = useState(false)
++  const summary = reasoningPreview(text, live)
++  return <div className={css.reasoning}>
++    <button type="button" className={css.reasoningToggle} aria-expanded={expanded}
++      onClick={() => { setExpanded(value => !value) }}>
++      <IconThinkOutlineRegular size={14} />
++      <span className={css.reasoningLabel}>{t('branch.reasoning')}</span>
++      {summary !== '' && <span className={css.reasoningSummary}>
++        {live ? <TextShimmer>{summary}</TextShimmer> : summary}
++      </span>}
++    </button>
++    {expanded && <div className={css.reasoningBody}>
++      <MarkdownText text={reasoningText(text)} streaming={live} labels={labels} variant="compact" />
++    </div>}
++  </div>
++}
+diff --git a/packages/session/message-quotes/src/client/QuoteSelection.module.css b/packages/session/message-quotes/src/client/QuoteSelection.module.css
+index 66eda4c..b8f1a4d 100644
+--- a/packages/session/message-quotes/src/client/QuoteSelection.module.css
++++ b/packages/session/message-quotes/src/client/QuoteSelection.module.css
+@@ -1,3 +1,13 @@
++.actions {
++  display: flex;
++  gap: 3px;
++  padding: 3px;
++  border-radius: 999px;
++  corner-shape: round;
++  background: var(--dsw-alias-button-floating-fill);
++  box-shadow: var(--dsw-elevation-panel);
++}
++
+ .action {
+   padding: 5px 10px;
+   border: none;
+@@ -5,7 +15,7 @@
+   corner-shape: round;
+   background: var(--dsw-alias-button-floating-fill);
+   --dsw-elevation-stroke-color: var(--dsw-alias-border-l3);
+-  box-shadow: var(--dsw-elevation-panel);
++  box-shadow: none;
+   color: var(--dsw-alias-label-primary);
+   font: var(--dsw-font-xs-13);
+   cursor: pointer;
+diff --git a/packages/session/message-quotes/src/client/QuoteSelection.tsx b/packages/session/message-quotes/src/client/QuoteSelection.tsx
+index 431628a..e31c9c4 100644
+--- a/packages/session/message-quotes/src/client/QuoteSelection.tsx
++++ b/packages/session/message-quotes/src/client/QuoteSelection.tsx
+@@ -1,6 +1,8 @@
+ /** Quote action rendered through the Chat text-interaction Slot. */
+ import { useEffect } from 'react'
+-import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
++import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
++import type { SessionId } from '@deepseek-ai/dsh-session/types'
++import type { BranchAnchor } from './branch-chat.ts'
+ import css from './QuoteSelection.module.css'
+ 
+ /**
+@@ -8,15 +10,20 @@ import css from './QuoteSelection.module.css'
+  * @param props - area-local text interaction and standard Session/composer seats.
+  * @returns the quote button after a valid selection in a writable conversation.
+  */
+-export function QuoteSelectionAction({ dismiss, readText, clearSelection, inputActions, useSession, t }:
+-PropsRuntime<'conversation.chat.text-interaction'> & PropsLocale<'messageQuotes'>) {
++/** Creation action supplied by the browser plugin, separate from the main composer. */
++export interface QuoteSelectionInjected {
++  createBranch: (sessionId: SessionId, text: string, anchor: BranchAnchor) => void
++}
++
++export function QuoteSelectionAction({ dismiss, readText, clearSelection, inputActions, useSession, sessionId, createBranch, t }:
++PropsRuntime<'conversation.chat.text-interaction'> & PropsLocale<'messageQuotes'> & InjectFace<QuoteSelectionInjected>) {
+   const enabled = useSession(s => !s.removed && (s.subagent === null
+-    || (s.subagent.address.mode === 'continuable' && s.subagent.parentAvailable === true)))
++    || s.subagent.address.mode === 'continuable'))
+   useEffect(() => {
+     if (!enabled) dismiss()
+   }, [enabled, dismiss])
+   if (!enabled) return null
+-  return <button type="button" className={css.action} aria-label={t('quote.add')}
++  return <div className={css.actions}><button type="button" className={css.action} aria-label={t('quote.add')}
+     onPointerDown={(event) => { event.preventDefault() }}
+     onClick={() => {
+       const text = readText()
+@@ -24,5 +31,15 @@ PropsRuntime<'conversation.chat.text-interaction'> & PropsLocale<'messageQuotes'
+       if (!inputActions.insertQuote(text)) return
+       clearSelection()
+       dismiss()
+-    }}>{t('quote.add')}</button>
++    }}>{t('quote.add')}</button><button type="button" className={css.action} aria-label={t('branch.create')}
++      onPointerDown={(event) => { event.preventDefault() }}
++      onClick={() => {
++        const text = readText()
++        if (text === null) { dismiss(); return }
++        const selection = window.getSelection()
++        const rect = selection?.rangeCount ? selection.getRangeAt(0).getClientRects()[0] : undefined
++        createBranch(sessionId, text, { x: rect?.right ?? window.innerWidth / 2, y: rect?.top ?? window.innerHeight / 3 })
++        clearSelection()
++        dismiss()
++      }}>{t('branch.create')}</button></div>
+ }
+diff --git a/packages/session/message-quotes/src/client/branch-chat.ts b/packages/session/message-quotes/src/client/branch-chat.ts
+new file mode 100644
+index 0000000..b0caac4
+--- /dev/null
++++ b/packages/session/message-quotes/src/client/branch-chat.ts
+@@ -0,0 +1,279 @@
++/** Local branch windows backed by ordinary forked Sessions and their event feed. */
++import type { ISessions, SessionEventLikeEntry, SessionReference } from '@deepseek-ai/dsh-api-session-controller/client'
++import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
++import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session/types'
++
++declare module '@deepseek-ai/dsh-api-session-controller/client' {
++  interface SessionReferenceSourceMap {
++    /** A visible branch window owns this child's Client generation. */
++    branchChat: unknown
++  }
++}
++
++/** Viewport point used when a selection opens its window. */
++export interface BranchAnchor { readonly x: number; readonly y: number }
++
++/** One new message, excluding the inherited Session prefix. */
++export interface BranchMessage {
++  readonly seq: number
++  readonly role: 'user' | 'assistant'
++  readonly text: string
++  readonly reasoning?: string
++  readonly live?: boolean
++}
++
++/** One window in the local application. */
++export interface BranchWindow {
++  readonly id: string
++  readonly parentId: SessionId
++  readonly childId?: SessionId
++  readonly quote: string
++  readonly x: number
++  readonly y: number
++  readonly baselineSeq: number
++  readonly messages: readonly BranchMessage[]
++  readonly loading: boolean
++  readonly running: boolean
++  readonly error: string | null
++}
++
++/** Durable browser-local presentation data; model history lives in the child Session log. */
++interface SavedBranch {
++  id: string
++  parentId: SessionId
++  childId: SessionId
++  quote: string
++  x: number
++  y: number
++  baselineSeq: number
++}
++
++const STORAGE_KEY = 'dsh.branch-chat.windows.v1'
++
++function savedBranches(): SavedBranch[] {
++  if (typeof localStorage === 'undefined') return []
++  try {
++    const value: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]')
++    if (!Array.isArray(value)) return []
++    return value.filter((item): item is SavedBranch =>
++      typeof item === 'object' && item !== null
++      && typeof item.id === 'string' && typeof item.parentId === 'string'
++      && typeof item.childId === 'string' && typeof item.quote === 'string'
++      && typeof item.x === 'number' && typeof item.y === 'number'
++      && typeof item.baselineSeq === 'number')
++  } catch { return [] }
++}
++
++function visibleMessageText(event: SessionEvent, quote: string): BranchMessage | null {
++  if (event.type === 'user/message') {
++    if (event.data.source.kind !== 'user') return null
++    const text = event.data.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n')
++    const prefix = `> ${quote.replaceAll('\n', '\n> ')}\n\n`
++    return { seq: event.seq, role: 'user', text: text.startsWith(prefix) ? text.slice(prefix.length) : text }
++  }
++  if (event.type === 'assistant/message') {
++    const text = event.data.message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n')
++    const reasoning = event.data.message.content.flatMap(block => block.type === 'reasoning' ? [block.text] : []).join('\n')
++    return text === '' && reasoning === '' ? null : { seq: event.seq, role: 'assistant', text, reasoning }
++  }
++  return null
++}
++
++/** Compose only actual model chunks; a settled Assistant event replaces these transient rows. */
++function branchMessages(entries: readonly SessionEventLikeEntry[], baselineSeq: number, quote: string): BranchMessage[] {
++  const messages: BranchMessage[] = []
++  const attempts = new Map<string, { seq: number; blocks: Map<number, { kind: 'text' | 'reasoning'; text: string }> }>()
++  for (const entry of entries) {
++    if (entry.event.seq <= baselineSeq) continue
++    if (entry.type === 'event') {
++      const message = visibleMessageText(entry.event, quote)
++      if (message !== null) messages.push(message)
++      continue
++    }
++    const { attemptId, chunk } = entry.event.data
++    const key = String(attemptId)
++    let attempt = attempts.get(key)
++    if (attempt === undefined) {
++      attempt = { seq: entry.event.seq, blocks: new Map() }
++      attempts.set(key, attempt)
++    }
++    attempt.seq = Math.max(attempt.seq, entry.event.seq)
++    if (chunk.type === 'reasoning-delta' || chunk.type === 'text-delta') {
++      const kind = chunk.type === 'reasoning-delta' ? 'reasoning' : 'text'
++      const previous = attempt.blocks.get(chunk.index)
++      attempt.blocks.set(chunk.index, { kind, text: (previous?.kind === kind ? previous.text : '') + chunk.text })
++    } else if (chunk.type === 'block-end' && (chunk.block.type === 'reasoning' || chunk.block.type === 'text')) {
++      attempt.blocks.set(chunk.index, { kind: chunk.block.type, text: chunk.block.text })
++    }
++  }
++  for (const attempt of attempts.values()) {
++    const blocks = [...attempt.blocks].sort(([left], [right]) => left - right).map(([, block]) => block)
++    const text = blocks.filter(block => block.kind === 'text').map(block => block.text).join('\n')
++    const reasoning = blocks.filter(block => block.kind === 'reasoning').map(block => block.text).join('\n')
++    if (text !== '' || reasoning !== '') messages.push({ seq: attempt.seq, role: 'assistant', text, reasoning, live: true })
++  }
++  return messages.sort((left, right) => left.seq - right.seq)
++}
++
++interface BranchRuntime {
++  readonly reference: SessionReference
++  disposeEvents: () => void
++  disposeSession: () => void
++}
++
++/** Own forked child lifetimes while their source conversation is selected. */
++export class BranchChatController {
++  readonly state: SnapshotStore<readonly BranchWindow[]>
++  private readonly runtimes = new Map<string, BranchRuntime>()
++  private readonly attaching = new Set<string>()
++  private readonly disposeList: () => void
++  private activeParent: SessionId | undefined
++  private disposed = false
++
++  /** @param sessions - existing Session service. */
++  constructor(private readonly sessions: ISessions) {
++    this.state = createSnapshotStore(savedBranches().map(saved => ({ ...saved, messages: [], loading: true, running: false, error: null })))
++    this.disposeList = sessions.list.subscribe(() => { this.syncActive() })
++    this.syncActive()
++  }
++
++  private publish(id: string, change: Partial<BranchWindow>): void {
++    this.state.set(this.state.getSnapshot().map(item => item.id === id ? { ...item, ...change } : item))
++  }
++
++  private persist(): void {
++    if (typeof localStorage === 'undefined') return
++    const saved = this.state.getSnapshot().flatMap((item): SavedBranch[] => item.childId === undefined ? [] : [{
++      id: item.id, parentId: item.parentId, childId: item.childId, quote: item.quote,
++      x: item.x, y: item.y, baselineSeq: item.baselineSeq,
++    }])
++    localStorage.setItem(STORAGE_KEY, JSON.stringify(saved))
++  }
++
++  private syncActive(): void {
++    const next = Object.values(this.sessions.list.getSnapshot().byId)
++      .find(row => (row.retainedBy.mainView ?? 0) > 0)?.id
++    if (next !== this.activeParent) {
++      this.activeParent = next
++      for (const id of this.runtimes.keys()) this.detach(id)
++    }
++    if (next === undefined) return
++    for (const item of this.state.getSnapshot()) {
++      if (item.parentId === next && item.childId !== undefined && !this.runtimes.has(item.id)) this.attach(item)
++    }
++  }
++
++  private attach(item: BranchWindow): void {
++    if (item.childId === undefined || this.disposed || this.attaching.has(item.id)) return
++    this.attaching.add(item.id)
++    let reference: SessionReference
++    try { reference = this.sessions.retain(item.childId, { source: 'branchChat' }) }
++    catch (error) {
++      this.publish(item.id, { loading: false, error: String(error) })
++      return
++    } finally { this.attaching.delete(item.id) }
++    const runtime: BranchRuntime = { reference, disposeEvents: () => {}, disposeSession: () => {} }
++    this.runtimes.set(item.id, runtime)
++    void reference.ready.then(() => {
++      if (this.runtimes.get(item.id) !== runtime) return
++      const source = reference.binding.eventSource
++      const refresh = (): void => {
++        const entries = source.getSnapshot().entries
++        const current = this.state.getSnapshot().find(row => row.id === item.id)
++        if (current === undefined) return
++        const session = reference.binding.session.getSnapshot()
++        if (session.openState === 'error') {
++          this.publish(item.id, { loading: false, error: String(session.openError) })
++          return
++        }
++        const baselineSeq = current.baselineSeq < 0
++          ? entries.reduce((last, entry) => Math.max(last, entry.event.seq), 0) : current.baselineSeq
++        const messages = branchMessages(entries, baselineSeq, current.quote)
++        this.publish(item.id, { baselineSeq, messages, loading: false })
++        if (current.baselineSeq < 0) this.persist()
++      }
++      runtime.disposeEvents = source.subscribe(refresh)
++      runtime.disposeSession = reference.binding.session.subscribe(() => {
++        this.publish(item.id, { running: reference.binding.session.getSnapshot().running })
++      })
++      refresh()
++      this.publish(item.id, { running: reference.binding.session.getSnapshot().running })
++    }, error => {
++      if (this.runtimes.get(item.id) === runtime) this.publish(item.id, { loading: false, error: String(error) })
++    })
++  }
++
++  private detach(id: string): void {
++    const runtime = this.runtimes.get(id)
++    if (runtime === undefined) return
++    this.runtimes.delete(id)
++    runtime.disposeEvents()
++    runtime.disposeSession()
++    runtime.reference.release()
++  }
++
++  /** Give the existing per-session model selector the branch's retained binding. */
++  referenceFor(id: string): SessionReference | undefined { return this.runtimes.get(id)?.reference }
++
++  /** Create a child Session with the current completed conversation prefix. */
++  create(parentId: SessionId, quote: string, anchor: BranchAnchor): void {
++    const id = crypto.randomUUID()
++    const width = Math.min(420, window.innerWidth - 24, window.innerHeight * 0.65)
++    const height = Math.min(700, window.innerHeight - 24)
++    const x = Math.max(12, Math.min(anchor.x + 18, window.innerWidth - width - 12))
++    const y = Math.max(12, Math.min(anchor.y - 18, window.innerHeight - height - 12))
++    this.state.set([...this.state.getSnapshot(), {
++      id, parentId, quote, x, y, baselineSeq: -1, messages: [], loading: true, running: false, error: null,
++    }])
++    void this.sessions.fork({ sessionId: parentId }).then(childId => {
++      // This marker is read by the Workspace tree before a child can become a sidebar row.
++      try {
++        localStorage.setItem(`dsh.branch-chat.hidden.${childId}`, '1')
++      } catch (error) {
++        this.publish(id, { loading: false, error: String(error) })
++        return
++      }
++      if (this.disposed || !this.state.getSnapshot().some(row => row.id === id)) return
++      this.publish(id, { childId })
++      this.persist()
++      this.syncActive()
++      const branch = this.state.getSnapshot().find(row => row.id === id)
++      if (branch !== undefined && !this.runtimes.has(id)) this.attach(branch)
++    }, error => { this.publish(id, { loading: false, error: String(error) }) })
++  }
++
++  /** Send a follow-up to the copied Session without writing to its parent. */
++  async send(id: string, question: string): Promise<void> {
++    const item = this.state.getSnapshot().find(row => row.id === id)
++    const runtime = this.runtimes.get(id)
++    if (item === undefined || runtime === undefined || question.trim() === '') return
++    this.publish(id, { error: null, running: true })
++    const quoted = `> ${item.quote.replaceAll('\n', '\n> ')}\n\n${question.trim()}`
++    try {
++      const result = await runtime.reference.binding.session.prompt([{ type: 'text', text: quoted }], 'queue')
++      if (!result.ok) this.publish(id, { running: false, error: result.error.message })
++    } catch (error) {
++      this.publish(id, { running: false, error: String(error) })
++    }
++  }
++
++  /** Remember a dragged viewport location. */
++  move(id: string, anchor: BranchAnchor): void {
++    this.publish(id, anchor)
++    this.persist()
++  }
++
++  /** Remove the window; child logs stay hidden and untouched. */
++  remove(id: string): void {
++    this.detach(id)
++    this.state.set(this.state.getSnapshot().filter(row => row.id !== id))
++    this.persist()
++  }
++
++  /** Release all active child references and subscriptions. */
++  dispose(): void {
++    this.disposed = true
++    this.disposeList()
++    for (const id of this.runtimes.keys()) this.detach(id)
++  }
++}
+diff --git a/packages/session/message-quotes/src/client/branch-math.ts b/packages/session/message-quotes/src/client/branch-math.ts
+new file mode 100644
+index 0000000..bc2fc7f
+--- /dev/null
++++ b/packages/session/message-quotes/src/client/branch-math.ts
+@@ -0,0 +1,32 @@
++/** Prepare model-authored display TeX for the shared Markdown renderer. */
++
++/** Put a display-math opener after prose on its own line, outside code fences. */
++export function normalizeBranchMath(text: string): string {
++  const lines = text.split('\n')
++  const output: string[] = []
++  let fence: { marker: string; size: number } | null = null
++  for (let index = 0; index < lines.length; index++) {
++    const line = lines[index]!
++    const marker = /^ {0,3}(`{3,}|~{3,})/u.exec(line)?.[1]
++    if (marker !== undefined) {
++      if (fence === null) fence = { marker: marker[0]!, size: marker.length }
++      else if (marker[0] === fence.marker && marker.length >= fence.size) fence = null
++      output.push(line)
++      continue
++    }
++    if (fence !== null || /^ {4}/u.test(line)) { output.push(line); continue }
++    const match = /^(.*\S[ \t]*)\\\[[ \t]*\r?$/u.exec(line)
++    const prefix = match?.[1]
++    if (prefix === undefined || prefix.endsWith('\\')) { output.push(line); continue }
++    let closed = false
++    for (let next = index + 1; next < lines.length; next++) {
++      const candidate = lines[next]!
++      if (/^[ \t]*\\\][ \t]*\r?$/u.test(candidate)) { closed = true; break }
++      if (/^ {0,3}(`{3,}|~{3,})/u.test(candidate)) break
++    }
++    if (!closed) { output.push(line); continue }
++    const returnChar = line.endsWith('\r') ? '\r' : ''
++    output.push(prefix.trimEnd() + returnChar, returnChar, '\\[' + returnChar)
++  }
++  return output.join('\n')
++}
+diff --git a/packages/session/message-quotes/src/client/index.ts b/packages/session/message-quotes/src/client/index.ts
+index e7a9348..5e28bba 100644
+--- a/packages/session/message-quotes/src/client/index.ts
++++ b/packages/session/message-quotes/src/client/index.ts
+@@ -5,7 +5,10 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
+ import type {} from '@deepseek-ai/dsh-client-ui-chat/client'
+ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
+ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+-import { QuoteSelectionAction } from './QuoteSelection.tsx'
++import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
++import { QuoteSelectionAction, type QuoteSelectionInjected } from './QuoteSelection.tsx'
++import { BranchChatController } from './branch-chat.ts'
++import { BranchChatOverlay, type BranchOverlayInjected } from './BranchChatOverlay.tsx'
+ import { QuotedUserText } from './QuotedUserText.tsx'
+ import { quoteRule } from './quote-rule.ts'
+ import { en, ja, es, fr, de, ru, pt, NS, zh, type MessageQuotesKey } from './locales.ts'
+@@ -30,6 +33,8 @@ export const inject = ['slots', 'locale', 'sessions', 'uiConversation']
+  * @param ctx - Client root context owning every Quote contribution.
+  */
+ export function apply(ctx: Context): void {
++  const branches = new BranchChatController(ctx.sessions)
++  ctx.effect(() => () => { branches.dispose() }, 'message-quotes: branch windows')
+   ctx.effect(() => ctx.locale.register(NS, { zh, en, ja, es, fr, de, ru, pt }), 'message-quotes: dictionaries')
+   ctx.effect(() => ctx.uiConversation.userText.register(quoteRule), 'message-quotes: UserText rule')
+   ctx.effect(() => ctx.uiConversation.interactions.register({
+@@ -40,13 +45,25 @@ export function apply(ctx: Context): void {
+       if (binding === undefined) return
+       const session = binding.session.getSnapshot()
+       if (session.removed || (session.subagent !== null
+-        && (session.subagent.address.mode !== 'continuable' || session.subagent.parentAvailable !== true))) return
++        && session.subagent.address.mode !== 'continuable')) return
+       request.open()
+     },
+   }), 'message-quotes: selection interaction')
+   ctx.slots.inject('conversation.chat.text-interaction', () => ctx.slots.register({
+     name: 'conversation.chat.text-interaction', key: 'quote', locale: NS,
++    inject: (): QuoteSelectionInjected => ({ createBranch: (sessionId, text, anchor) => { branches.create(sessionId, text, anchor) } }),
+   }, QuoteSelectionAction))
++  ctx.slots.inject('shell.overlay', () => ctx.slots.register({
++    name: 'shell.overlay', id: 'message-quotes.branch-chat', locale: NS,
++    children: { 'branch.chat.model': { kind: 'single', scope: 'session' } },
++    inject: (): BranchOverlayInjected => ({
++      hooks: { branches: branches.state },
++      sendBranch: (id, question) => branches.send(id, question),
++      moveBranch: (id, anchor) => { branches.move(id, anchor) },
++      removeBranch: id => { branches.remove(id) },
++      referenceFor: id => branches.referenceFor(id),
++    }),
++  }, BranchChatOverlay))
+   ctx.slots.inject('conversation.user.text.node', () => ctx.slots.register({
+     name: 'conversation.user.text.node', key: 'quote', priority: 100,
+   }, QuotedUserText))
+diff --git a/packages/session/message-quotes/src/client/locales.ts b/packages/session/message-quotes/src/client/locales.ts
+index 4d704e8..f738b5d 100644
+--- a/packages/session/message-quotes/src/client/locales.ts
++++ b/packages/session/message-quotes/src/client/locales.ts
+@@ -6,6 +6,18 @@ export const NS = 'messageQuotes'
+ /** Simplified Chinese dictionary and key source. */
+ export const zh = {
+   'quote.add': '引用文本',
++  'branch.create': '创建分支聊天',
++  'branch.title': '分支聊天',
++  'branch.delete': '删除分支聊天',
++  'branch.placeholder': '针对这段话继续问……',
++  'branch.send': '发送',
++  'branch.drag': '拖动移动',
++  'branch.loading': '正在创建分支……',
++  'branch.waiting': '正在回答……',
++  'branch.reasoning': '思考过程',
++  'branch.copy': '复制', 'branch.copied': '已复制', 'branch.code': '代码',
++  'branch.wrap': '自动换行', 'branch.unwrap': '不换行', 'branch.footnotes': '脚注',
++  'branch.error': '分支聊天出错：{message}',
+ }
+ 
+ /** Supported Quote interaction copy keys. */
+@@ -14,34 +26,69 @@ export type MessageQuotesKey = keyof typeof zh
+ /** English dictionary. */
+ export const en: Record<MessageQuotesKey, string> = {
+   'quote.add': 'Quote text',
++  'branch.create': 'Create branch chat', 'branch.title': 'Branch chat', 'branch.delete': 'Delete branch chat',
++  'branch.placeholder': 'Ask about this selection…', 'branch.send': 'Send', 'branch.drag': 'Drag to move',
++  'branch.loading': 'Creating branch…', 'branch.waiting': 'Answering…', 'branch.reasoning': 'Thinking', 'branch.error': 'Branch chat failed: {message}',
++  'branch.copy': 'Copy', 'branch.copied': 'Copied', 'branch.code': 'Code',
++  'branch.wrap': 'Wrap lines', 'branch.unwrap': 'Do not wrap lines', 'branch.footnotes': 'Footnotes',
+ }
+ 
+ /** Japanese dictionary. */
+ export const ja = {
+   'quote.add': 'テキストを引用',
++  'branch.create': '分岐チャットを作成', 'branch.title': '分岐チャット', 'branch.delete': '分岐チャットを削除',
++  'branch.placeholder': '選択した文章について質問…', 'branch.send': '送信', 'branch.drag': 'ドラッグして移動',
++  'branch.loading': '分岐を作成中…', 'branch.waiting': '回答中…', 'branch.reasoning': '思考過程', 'branch.error': '分岐チャットのエラー：{message}',
++  'branch.copy': 'コピー', 'branch.copied': 'コピーしました', 'branch.code': 'コード',
++  'branch.wrap': '折り返す', 'branch.unwrap': '折り返さない', 'branch.footnotes': '脚注',
+ } satisfies Record<MessageQuotesKey, string>
+ 
+ /** Spanish dictionary, checked against the English keys. */
+ export const es = {
+   'quote.add': 'Texto de cotización',
++  'branch.create': 'Crear chat de rama', 'branch.title': 'Chat de rama', 'branch.delete': 'Eliminar chat de rama',
++  'branch.placeholder': 'Pregunta sobre esta selección…', 'branch.send': 'Enviar', 'branch.drag': 'Arrastra para mover',
++  'branch.loading': 'Creando rama…', 'branch.waiting': 'Respondiendo…', 'branch.reasoning': 'Razonamiento', 'branch.error': 'Error del chat de rama: {message}',
++  'branch.copy': 'Copiar', 'branch.copied': 'Copiado', 'branch.code': 'Código',
++  'branch.wrap': 'Ajustar líneas', 'branch.unwrap': 'No ajustar líneas', 'branch.footnotes': 'Notas al pie',
+ } satisfies Record<keyof typeof en, string>
+ 
+ /** French dictionary, checked against the English keys. */
+ export const fr = {
+   'quote.add': 'Texte de citation',
++  'branch.create': 'Créer un chat de branche', 'branch.title': 'Chat de branche', 'branch.delete': 'Supprimer le chat de branche',
++  'branch.placeholder': 'Poser une question sur la sélection…', 'branch.send': 'Envoyer', 'branch.drag': 'Faire glisser',
++  'branch.loading': 'Création de la branche…', 'branch.waiting': 'Réponse en cours…', 'branch.reasoning': 'Réflexion', 'branch.error': 'Erreur du chat de branche : {message}',
++  'branch.copy': 'Copier', 'branch.copied': 'Copié', 'branch.code': 'Code',
++  'branch.wrap': 'Retour à la ligne', 'branch.unwrap': 'Ne pas retourner à la ligne', 'branch.footnotes': 'Notes',
+ } satisfies Record<keyof typeof en, string>
+ 
+ /** German dictionary, checked against the English keys. */
+ export const de = {
+   'quote.add': 'Zitattext',
++  'branch.create': 'Zweigchat erstellen', 'branch.title': 'Zweigchat', 'branch.delete': 'Zweigchat löschen',
++  'branch.placeholder': 'Zu dieser Auswahl fragen…', 'branch.send': 'Senden', 'branch.drag': 'Zum Verschieben ziehen',
++  'branch.loading': 'Zweig wird erstellt…', 'branch.waiting': 'Antwort wird erstellt…', 'branch.reasoning': 'Denkprozess', 'branch.error': 'Zweigchat-Fehler: {message}',
++  'branch.copy': 'Kopieren', 'branch.copied': 'Kopiert', 'branch.code': 'Code',
++  'branch.wrap': 'Zeilen umbrechen', 'branch.unwrap': 'Zeilen nicht umbrechen', 'branch.footnotes': 'Fußnoten',
+ } satisfies Record<keyof typeof en, string>
+ 
+ /** Russian dictionary, checked against the English keys. */
+ export const ru = {
+   'quote.add': 'Текст цитаты',
++  'branch.create': 'Создать ответвление', 'branch.title': 'Ответвление', 'branch.delete': 'Удалить ответвление',
++  'branch.placeholder': 'Спросите об этом фрагменте…', 'branch.send': 'Отправить', 'branch.drag': 'Перетащите для перемещения',
++  'branch.loading': 'Создание ответвления…', 'branch.waiting': 'Готовим ответ…', 'branch.reasoning': 'Ход рассуждений', 'branch.error': 'Ошибка ответвления: {message}',
++  'branch.copy': 'Копировать', 'branch.copied': 'Скопировано', 'branch.code': 'Код',
++  'branch.wrap': 'Переносить строки', 'branch.unwrap': 'Не переносить строки', 'branch.footnotes': 'Сноски',
+ } satisfies Record<keyof typeof en, string>
+ 
+ /** Portuguese dictionary, checked against the English keys. */
+ export const pt = {
+   'quote.add': 'Citação de texto',
++  'branch.create': 'Criar conversa ramificada', 'branch.title': 'Conversa ramificada', 'branch.delete': 'Excluir conversa ramificada',
++  'branch.placeholder': 'Pergunte sobre esta seleção…', 'branch.send': 'Enviar', 'branch.drag': 'Arraste para mover',
++  'branch.loading': 'Criando ramificação…', 'branch.waiting': 'Respondendo…', 'branch.reasoning': 'Raciocínio', 'branch.error': 'Erro na conversa ramificada: {message}',
++  'branch.copy': 'Copiar', 'branch.copied': 'Copiado', 'branch.code': 'Código',
++  'branch.wrap': 'Quebrar linhas', 'branch.unwrap': 'Não quebrar linhas', 'branch.footnotes': 'Notas de rodapé',
+ } satisfies Record<keyof typeof en, string>
+diff --git a/packages/session/message-quotes/tests/branch-math.client.spec.ts b/packages/session/message-quotes/tests/branch-math.client.spec.ts
+new file mode 100644
+index 0000000..a0a412a
+--- /dev/null
++++ b/packages/session/message-quotes/tests/branch-math.client.spec.ts
+@@ -0,0 +1,14 @@
++import { describe, expect, it } from 'vitest'
++import { normalizeBranchMath } from '../src/client/branch-math.ts'
++
++describe('branch answer math display', () => {
++  it('moves inline display-math openers onto their own line without changing formulas', () => {
++    const reply = '阳极（氧化）：\\[\n2\\mathrm{Cl^-}\\rightarrow\\mathrm{Cl_2}\n\\]\n分数：\\[\n\\frac{1}{2}\n\\]'
++    expect(normalizeBranchMath(reply)).toBe('阳极（氧化）：\n\n\\[\n2\\mathrm{Cl^-}\\rightarrow\\mathrm{Cl_2}\n\\]\n分数：\n\n\\[\n\\frac{1}{2}\n\\]')
++  })
++
++  it('leaves prose slashes, code fences, escaped markers and incomplete math alone', () => {
++    const reply = 'x/y\n\n```tex\n阳极：\\[\n\\frac{1}{2}\n\\]\n```\n\nEscaped \\\\[\n\n阳极：\\[\nno close'
++    expect(normalizeBranchMath(reply)).toBe(reply)
++  })
++})
+diff --git a/packages/session/message-quotes/tests/quote-selection.client.spec.tsx b/packages/session/message-quotes/tests/quote-selection.client.spec.tsx
+index 1f773bf..a9edd0f 100644
+--- a/packages/session/message-quotes/tests/quote-selection.client.spec.tsx
++++ b/packages/session/message-quotes/tests/quote-selection.client.spec.tsx
+@@ -13,9 +13,11 @@ function props(enabled = true, subagent: SessionSnapshot['subagent'] = null) {
+   const inputActions = { insertQuote: vi.fn(() => true) }
+   const value = {
+     trigger: 'selection',
++    sessionId: SessionId('quote-selection'),
+     dismiss: vi.fn(), readText: vi.fn((): string | null => 'Hello world'), clearSelection: vi.fn(),
+     inputActions, useSession: selector => selector({ sessionId: SessionId('quote-selection'), pendingSubmissions: [], running: false, removed: !enabled, openState: 'open', openError: null, hasMore: false, loadingOlder: false, promptError: null, blank: false, subagent, lastAgentError: null, promptAttempted: true, awaitingFirstTurn: false }),
+-    t: () => 'Quote text',
++    createBranch: vi.fn(),
++    t: (key: string) => key === 'branch.create' ? 'Create branch chat' : 'Quote text',
+   } as Props
+   return { value, inputActions }
+ }
+@@ -36,11 +38,22 @@ describe('quote action consumer', () => {
+     expect(fixture.value.dismiss).toHaveBeenCalledOnce()
+   })
+ 
++  it('opens a branch from the selected text without inserting it into the main composer', () => {
++    const fixture = props()
++    const createBranch = vi.fn()
++    const view = render(<QuoteSelectionAction {...fixture.value} createBranch={createBranch} />)
++    fireEvent.click(view.getByRole('button', { name: 'Create branch chat' }))
++    expect(createBranch).toHaveBeenCalledWith(SessionId('quote-selection'), 'Hello world', expect.any(Object))
++    expect(fixture.inputActions.insertQuote).not.toHaveBeenCalled()
++    expect(fixture.value.clearSelection).toHaveBeenCalledOnce()
++    expect(fixture.value.dismiss).toHaveBeenCalledOnce()
++  })
++
+   it('closes an invalidated source without inserting stale text', () => {
+     const fixture = props()
+     vi.mocked(fixture.value.readText).mockReturnValue(null)
+     const view = render(<QuoteSelectionAction {...fixture.value} />)
+-    fireEvent.click(view.getByRole('button'))
++    fireEvent.click(view.getByRole('button', { name: 'Quote text' }))
+     expect(fixture.inputActions.insertQuote).not.toHaveBeenCalled()
+     expect(fixture.value.dismiss).toHaveBeenCalledOnce()
+   })
+@@ -52,16 +65,13 @@ describe('quote action consumer', () => {
+     expect(fixture.value.dismiss).toHaveBeenCalledOnce()
+   })
+ 
+-  it('responds to changes in a continuable subagent parent availability', () => {
++  it('allows quoting in continuable subagents and rejects one-shot records', () => {
+     const child = {
+       address: { parentSessionId: SessionId('parent'), childSessionId: SessionId('quote-selection'), mode: 'continuable' as const },
+-      parentAvailable: true,
+     }
+     const fixture = props(true, child)
+     const view = render(<QuoteSelectionAction {...fixture.value} />)
+-    expect(view.queryByRole('button')).not.toBeNull()
+-    view.rerender(<QuoteSelectionAction {...props(true, { ...child, parentAvailable: false }).value} />)
+-    expect(view.queryByRole('button')).toBeNull()
++    expect(view.queryByRole('button', { name: 'Quote text' })).not.toBeNull()
+     view.rerender(<QuoteSelectionAction {...props(true, { ...child, address: { ...child.address, mode: 'one-shot' } }).value} />)
+     expect(view.queryByRole('button')).toBeNull()
+   })
+@@ -74,7 +84,7 @@ describe('quote action consumer', () => {
+     }
+     const fixture = props()
+     const view = render(<Surface value={fixture.value} />)
+-    expect(view.queryByRole('button')).not.toBeNull()
++    expect(view.queryByRole('button', { name: 'Quote text' })).not.toBeNull()
+     view.rerender(<Surface value={props(false).value} />)
+     expect(view.queryByRole('button')).toBeNull()
+     view.rerender(<Surface value={fixture.value} />)
+diff --git a/packages/session/message-quotes/tsconfig.json b/packages/session/message-quotes/tsconfig.json
+index 51efa33..33ce824 100644
+--- a/packages/session/message-quotes/tsconfig.json
++++ b/packages/session/message-quotes/tsconfig.json
+@@ -17,12 +17,18 @@
+     {
+       "path": "../../client/locale/tsconfig.client.json"
+     },
++    {
++      "path": "../../client/store"
++    },
+     {
+       "path": "../../client/ui-chat/tsconfig.client.json"
+     },
+     {
+       "path": "../../client/ui-conversation/tsconfig.client.json"
+     },
++    {
++      "path": "../../client/ui-layout"
++    },
+     {
+       "path": "../../client/ui-renderer"
+     },
